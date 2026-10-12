@@ -1,0 +1,10 @@
+{
+	"id": "obsidian-bible-finder",
+	"name": "Bible Finder",
+	"version": "1.2.1",
+	"minAppVersion": "0.15.0",
+	"description": "Find and insert Bible verses from Bethlehem Bible files with advanced layout options.",
+	"author": "Antigravity",
+	"authorUrl": "https://github.com/google-deepmind",
+	"isDesktopOnly": false
+}
