@@ -14822,28 +14822,63 @@ var BibleCompareView = class extends import_obsidian.ItemView {
 
     const headerEl = container.createDiv({ cls: "bible-compare-header" });
 
-    // 1행: 검색창 + 검색 버튼
-    const row1El = headerEl.createDiv({ cls: "bible-compare-row1" });
+    // 1행: 검색창 + 검색 버튼 (<form> + IME 조합 완료 대응으로 iPadOS 가상키보드 검색 키 완벽 호환)
+    const row1El = headerEl.createEl("form", { cls: "bible-compare-row1" });
+    row1El.setAttribute("action", "javascript:void(0)");
     this.searchEl = row1El.createEl("input", {
       type: "text",
       placeholder: "장절 또는 단어 입력 (예: 요 3:12 / 믿음, 소망, 사랑 / grace and peace)",
       cls: "bible-compare-search-input"
     });
     this.searchEl.setAttribute("enterkeyhint", "search");
+    this.searchEl.setAttribute("autocomplete", "off");
+    this.searchEl.setAttribute("autocorrect", "off");
+    this.searchEl.setAttribute("autocapitalize", "off");
+    let _lastTriggerAt = 0;
+    let _pendingImeSearch = false;
+    const triggerCompareSearch = () => {
+      const now = Date.now();
+      if (now - _lastTriggerAt < 80) return;
+      _lastTriggerAt = now;
+      if (this.plugin) this.plugin.markManualSearch();
+      this.performSearch(this.searchEl ? this.searchEl.value : "");
+    };
     this.searchEl.addEventListener("focus", () => {
       if (this.plugin) this.plugin._lastFocusedBibleViewType = VIEW_TYPE_BIBLE_COMPARE;
     });
-    this.searchEl.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
-        if (this.plugin) this.plugin.markManualSearch();
-        this.performSearch(this.searchEl.value);
+    this.searchEl.addEventListener("compositionend", () => {
+      if (_pendingImeSearch) {
+        _pendingImeSearch = false;
+        setTimeout(() => triggerCompareSearch(), 10);
       }
     });
+    this.searchEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.keyCode === 13) {
+        e.preventDefault();
+        if (e.isComposing || e.keyCode === 229) {
+          _pendingImeSearch = true;
+          setTimeout(() => {
+            if (_pendingImeSearch) {
+              _pendingImeSearch = false;
+              triggerCompareSearch();
+            }
+          }, 50);
+          return;
+        }
+        triggerCompareSearch();
+      }
+    });
+    row1El.addEventListener("submit", (e) => {
+      e.preventDefault();
+      _pendingImeSearch = false;
+      setTimeout(() => triggerCompareSearch(), 20);
+    });
 
-    const searchBtn = row1El.createEl("button", { text: "검색", cls: "bible-compare-btn primary" });
-    searchBtn.addEventListener("click", () => {
-      if (this.plugin) this.plugin.markManualSearch();
-      this.performSearch(this.searchEl.value);
+    const searchBtn = row1El.createEl("button", { text: "검색", type: "button", cls: "bible-compare-btn primary" });
+    searchBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      _pendingImeSearch = false;
+      setTimeout(() => triggerCompareSearch(), 15);
     });
 
     // 2행: 원어 전환 버튼 + 지움/본문연동 옵션 + 글자크기
@@ -14925,6 +14960,9 @@ var BibleCompareView = class extends import_obsidian.ItemView {
 
     this.versionsContainerEl = row3Wrapper.createDiv({ cls: "bible-compare-row3-versions" });
     this.renderVersionChips();
+    if (this.plugin && (!this.plugin.bibles || this.plugin.bibles.size === 0) && typeof this.plugin.loadBibleData === "function") {
+      this.plugin.loadBibleData().then(() => this.renderVersionChips());
+    }
 
     selectAllBtn.addEventListener("click", async (e) => {
       e.preventDefault();
@@ -15010,8 +15048,9 @@ var BibleCompareView = class extends import_obsidian.ItemView {
 
   parseWordSearchTerms(input) {
     if (!input) return [];
-    const rawParts = String(input)
-      .split(/,|\s+and\s+|\s*&\s*/i)
+    const norm = typeof input.normalize === "function" ? input.normalize("NFC") : String(input);
+    const rawParts = norm
+      .split(/[,，、]|\s+and\s+|\s*&\s*/i)
       .map((t) => t.trim().toLowerCase())
       .filter(Boolean);
     return Array.from(new Set(rawParts));
@@ -15141,8 +15180,11 @@ var BibleCompareView = class extends import_obsidian.ItemView {
         for (const bibleObj of selectedBibleObjs) {
           const allVerses = Array.isArray(bibleObj.verses) ? bibleObj.verses : [];
           for (const v of allVerses) {
-            const cLower = (v.content || "").toLowerCase();
-            if (terms.every((t) => cLower.includes(t))) {
+            if (!v._lc) {
+              const rawContent = v.content || "";
+              v._lc = (typeof rawContent.normalize === "function" ? rawContent.normalize("NFC") : rawContent).toLowerCase();
+            }
+            if (terms.every((t) => v._lc.includes(t))) {
               const key = `${v.book}|${v.chapter}|${v.verse}`;
               if (!matchedMap.has(key)) {
                 matchedMap.set(key, {
