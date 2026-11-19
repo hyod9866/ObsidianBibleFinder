@@ -11213,7 +11213,7 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
             const lineText = editor.getLine(cursor.line);
             const sel = editor.getSelection ? editor.getSelection() : "";
             const targetText = sel && sel.trim().length > 0 ? sel : lineText;
-            const testRx = /(?:[\(\[\{<])?((?:[1-3]\s*)?[가-힣a-zA-Z]{1,10}(?:[1-3]서)?)\s*(\d{1,3})(?:\s*[:：]\s*(\d{1,3}(?:\s*[-~–]\s*\d{1,3}|\s*,\s*\d{1,3})*))?(?:[\)\]\}>])?/;
+            const testRx = /(?:[\(\[\{<])?((?:[1-3]\s*)?[가-힣a-zA-Z]{1,10}(?:[1-3]서)?)\s*(\d{1,3})(?:\s*[:：]\s*(\d{1,3}(?:\s*(?:[-~–_＿]|\\_)\s*\d{1,3}|\s*,\s*\d{1,3})*))?(?:[\)\]\}>])?/;
             const m = targetText.match(testRx);
             if (m) {
               const sb = getStandardBookCode(m[1], this.customBookMap);
@@ -11365,10 +11365,10 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
         } else {
           const cursor = editor.getCursor();
           const line = editor.getLine(cursor.line);
-          const regex = /(?:[\(\[\{<])?((?:[1-3]\s*)?[가-힣a-zA-Z]{1,10}(?:[1-3]서)?)\s*(\d{1,3})(?:\s*[:：]\s*(\d{1,3})(?:\s*[-~–,]\s*\d{1,3})*)?(?:[\)\]\}>])?/;
+          const regex = /(?:[\(\[\{<])?((?:[1-3]\s*)?[가-힣a-zA-Z]{1,10}(?:[1-3]서)?)\s*(\d{1,3})(?:\s*[:：]\s*(\d{1,3})(?:\s*(?:[-~–,_＿]|\\_)\s*\d{1,3})*)?(?:[\)\]\}>])?/;
           const match = line.match(regex);
           if (match) {
-            this.activateCompareView(match[0]);
+            this.activateCompareView(match[0].replace(/(\d+)\s*(?:\\?[_＿])\s*(\d+)/g, "$1-$2"));
           } else {
             this.activateCompareView();
           }
@@ -11479,10 +11479,10 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
         } else {
           const cursor = editor.getCursor();
           const line = editor.getLine(cursor.line);
-          const regex = /(?:[\(\[\{<])?((?:[1-3]\s*)?[가-힣a-zA-Z]{1,10}(?:[1-3]서)?)\s*(\d{1,3})(?:\s*[:：]\s*(\d{1,3})(?:\s*[-~–,]\s*\d{1,3})*)?(?:[\)\]\}>])?/;
+          const regex = /(?:[\(\[\{<])?((?:[1-3]\s*)?[가-힣a-zA-Z]{1,10}(?:[1-3]서)?)\s*(\d{1,3})(?:\s*[:：]\s*(\d{1,3})(?:\s*(?:[-~–,_＿]|\\_)\s*\d{1,3})*)?(?:[\)\]\}>])?/;
           const match = line.match(regex);
           if (match) {
-            this.activateStrongView(match[0]);
+            this.activateStrongView(match[0].replace(/(\d+)\s*(?:\\?[_＿])\s*(\d+)/g, "$1-$2"));
           } else {
             new import_obsidian.Notice("\uC120\uD0DD\uB41C \uD14D\uC2A4\uD2B8\uB098 \uCEE4\uC11C \uC904\uC5D0\uC11C \uC131\uACBD \uC7A5\uC808(\uC608: \uB9C8 18:15)\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
           }
@@ -11925,11 +11925,14 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
     if (!line || typeof line !== "string") return;
 
     try {
-      const regex = /(?:[\(\[\{<])?((?:[1-3]\s*)?[가-힣a-zA-Z]{1,10}(?:[1-3]서)?)\s*(\d{1,3})(?:\s*[:：장]\s*(\d{1,3})(?:\s*[-~–,]\s*\d{1,3})*)?(?:\s*절)?(?:[\)\]\}>])?/;
+      const regex = /(?:[\(\[\{<])?((?:[1-3]\s*)?[가-힣a-zA-Z]{1,10}(?:[1-3]서)?)\s*(\d{1,3})(?:\s*[:：장]\s*(\d{1,3})(?:\s*(?:[-~–,_＿]|\\_)\s*\d{1,3})*)?(?:\s*절)?(?:[\)\]\}>])?/;
       const match = line.match(regex);
       if (match) {
         const ref = match[0];
-        const cleanRef = ref.replace(/^[\(\[\{<【「『"'\s]+|[\)\]\}>】」』"'\s.]+$/g, "").trim();
+        const cleanRef = ref
+          .replace(/^[\(\[\{<【「『"'\s]+|[\)\]\}>】」』"'\s.]+$/g, "")
+          .replace(/(\d+)\s*(?:\\?[_＿])\s*(\d+)/g, "$1-$2")
+          .trim();
         const standardBook = getStandardBookCode(match[1], this.customBookMap);
         if (BIBLE_ORDER_MAP.has(standardBook)) {
           // 1. 스트롱 원어 성경
@@ -12968,7 +12971,7 @@ ${engBlock}`;
     const cursor = editor.getCursor();
     const lineText = editor.getLine(cursor.line);
     const sel = editor.getSelection ? editor.getSelection() : "";
-    const regex = /(?:[\(\[\{<])?((?:[1-3]\s*)?[가-힣a-zA-Z]{1,10}(?:[1-3]서)?)\s*(\d{1,3})(?:\s*[:：]\s*(\d{1,3}(?:\s*[-~–]\s*\d{1,3}|\s*,\s*\d{1,3})*))?(?:[\)\]\}>])?/g;
+    const regex = /(?:[\(\[\{<])?((?:[1-3]\s*)?[가-힣a-zA-Z]{1,10}(?:[1-3]서)?)\s*(\d{1,3})(?:\s*[:：]\s*(\d{1,3}(?:\s*(?:[-~–_＿]|\\_)\s*\d{1,3}|\s*,\s*\d{1,3})*))?(?:[\)\]\}>])?/g;
 
     let targetMatch = null;
     let targetStandardBook = null;
@@ -13059,7 +13062,7 @@ ${engBlock}`;
       for (const rawPart of String(verseSpec).split(",")) {
         const part = rawPart.trim();
         if (!part) continue;
-        const rm = part.match(/^(\d+)\s*[-~–]\s*(\d+)$/);
+        const rm = part.match(/^(\d+)\s*(?:[-~–_＿]|\\_)\s*(\d+)$/);
         if (rm) {
           const a = parseInt(rm[1], 10);
           const b = parseInt(rm[2], 10);
@@ -15291,9 +15294,12 @@ var BibleCompareView = class extends import_obsidian.ItemView {
     if (!input) return null;
     let clean = input.trim();
     // 앞뒤의 괄호 (), [], {}, <>, 【】, 「」, 『』, 따옴표, 마침표 등 제거
-    clean = clean.replace(/^[\(\[\{<【「『"'\s]+|[\)\]\}>】」』"'\s.]+$/g, "").trim();
+    clean = clean
+      .replace(/^[\(\[\{<【「『"'\s]+|[\)\]\}>】」』"'\s.]+$/g, "")
+      .replace(/(\d+\s*[:：장]\s*\d+)\s*(?:\\?[_＿])\s*(\d+)/g, "$1-$2")
+      .trim();
 
-    const regex = /((?:[1-3]\s*)?[가-힣a-zA-Z]{1,10}(?:[1-3]서)?)\s*(\d{1,3})(?:\s*[:：장]\s*(\d{1,3})(?:\s*[-~–,]\s*(\d{1,3}))?)?(?:\s*절)?/;
+    const regex = /((?:[1-3]\s*)?[가-힣a-zA-Z]{1,10}(?:[1-3]서)?)\s*(\d{1,3})(?:\s*[:：장]\s*(\d{1,3})(?:\s*(?:[-~–,_＿]|\\_)\s*(\d{1,3}))?)?(?:\s*절)?/;
     let match = clean.match(regex);
     if (!match) {
       match = input.match(regex);
