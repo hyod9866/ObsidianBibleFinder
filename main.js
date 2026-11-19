@@ -11035,8 +11035,8 @@ var DEFAULT_SETTINGS = {
   refLocation: "front",
   addVersionNameSearch: false,
   addVersionNameReplace: false,
-  englishBookFormat: "full",
-  koreanBookFormat: "full",
+  englishBookFormat: "short",
+  koreanBookFormat: "short",
   bibleDisplayMode: "korean",
   bethlehemWinFolder: "_strong",
   selectedStrongBibleKor: "\uAC1C\uC5ED\uD55C\uAE00S.sdb",
@@ -12786,24 +12786,27 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
     const korFormat = this.settings.koreanBookFormat;
     const getBookDisplay = (v) => {
       if (isEnglish) {
+        if (engFormat === "korean") {
+          if (korFormat === "full") return BIBLE_FULL_NAMES[v.book] || v.book;
+          if (korFormat === "raw") return v.rawBook;
+          return v.book;
+        }
         const engName = BIBLE_ENGLISH_NAMES[v.book];
         if (engName) {
           if (engFormat === "full")
             return engName.full;
-          if (engFormat === "short")
-            return engName.short;
           if (engFormat === "raw")
             return v.rawBook;
+          return engName.short;
         }
       } else {
         if (korFormat === "full")
           return BIBLE_FULL_NAMES[v.book] || v.book;
-        if (korFormat === "short")
-          return v.book;
         if (korFormat === "raw")
           return v.rawBook;
+        return v.book;
       }
-      return BIBLE_FULL_NAMES[v.book] || v.book;
+      return v.book;
     };
     const formatVerseRefNums = (vList) => {
       if (!vList || vList.length === 0) return "";
@@ -15562,11 +15565,15 @@ var BibleCompareView = class extends import_obsidian.ItemView {
     const korFormat = this.plugin.settings.koreanBookFormat;
     let bookDisplay = "";
     if (isEng) {
-      const engName = BIBLE_ENGLISH_NAMES[item.parsed.standardBook];
-      if (engName) {
-        bookDisplay = engFormat === "full" ? engName.full : (engFormat === "short" ? engName.short : (firstV.rawBook || engName.short));
+      if (engFormat === "korean") {
+        bookDisplay = korFormat === "full" ? (BIBLE_FULL_NAMES[item.parsed.standardBook] || item.parsed.standardBook) : (korFormat === "raw" ? (firstV.rawBook || item.parsed.rawBook || item.parsed.standardBook) : item.parsed.standardBook);
       } else {
-        bookDisplay = item.parsed.standardBook;
+        const engName = BIBLE_ENGLISH_NAMES[item.parsed.standardBook];
+        if (engName) {
+          bookDisplay = engFormat === "full" ? engName.full : (engFormat === "raw" ? (firstV.rawBook || engName.short) : engName.short);
+        } else {
+          bookDisplay = item.parsed.standardBook;
+        }
       }
     } else {
       if (korFormat === "full") {
