@@ -10523,8 +10523,10 @@ var require_bible_places = __commonJS({
 // main.ts
 var main_exports = {};
 __export(main_exports, {
+  BibleCompareView: () => BibleCompareView,
   BibleMapView: () => BibleMapView,
   StrongBibleView: () => StrongBibleView,
+  VIEW_TYPE_BIBLE_COMPARE: () => VIEW_TYPE_BIBLE_COMPARE,
   VIEW_TYPE_BIBLE_MAP: () => VIEW_TYPE_BIBLE_MAP,
   VIEW_TYPE_STRONG_BIBLE: () => VIEW_TYPE_STRONG_BIBLE,
   default: () => BethlehemBiblePlugin
@@ -10582,10 +10584,12 @@ var BIBLE_BOOKS = {
   "\uB300\uC77C": "\uC5ED\uB300\uAE30\uC0C1",
   "\uB300\uC774": "\uC5ED\uB300\uAE30\uD558",
   "\uC2A4": "\uC5D0\uC2A4\uB77C",
+  "\uB77C": "\uC5D0\uC2A4\uB77C",
   "\uC5D0\uC2A4\uB77C": "\uC5D0\uC2A4\uB77C",
   "\uB290": "\uB290\uD5E4\uBBF8\uC57C",
   "\uB290\uD5E4": "\uB290\uD5E4\uBBF8\uC57C",
   "\uC5D0": "\uC5D0\uC2A4\uB354",
+  "\uB354": "\uC5D0\uC2A4\uB354",
   "\uC5D0\uC2A4\uB354": "\uC5D0\uC2A4\uB354",
   "\uC6A5": "\uC6A5\uAE30",
   "\uC2DC": "\uC2DC\uD3B8",
@@ -10900,7 +10904,7 @@ var ENGLISH_VERSION_FULL_NAMES = {
   "NLT": "New Living Translation"
 };
 function getStandardBookCode(bookText, customMap = {}) {
-  const trimmed = bookText.trim();
+  const trimmed = bookText.trim().replace(/\s+/g, "");
   if (BIBLE_ORDER_MAP.has(trimmed)) {
     return trimmed;
   }
@@ -10944,7 +10948,7 @@ function getStandardBookCode(bookText, customMap = {}) {
     "ob": "\uC635",
     "jn": "\uC698",
     "mi": "\uBBF8",
-    "na": "na",
+    "na": "\uB098",
     "hb": "\uD569",
     "zp": "\uC2B5",
     "hg": "\uD559",
@@ -11034,7 +11038,7 @@ var DEFAULT_SETTINGS = {
   englishBookFormat: "full",
   koreanBookFormat: "full",
   bibleDisplayMode: "korean",
-  bethlehemWinFolder: "C:\\Users\\D-kanghyodgeun\\OneDrive\\Documents\\BethlehemWin",
+  bethlehemWinFolder: "_strong",
   selectedStrongBibleKor: "\uAC1C\uC5ED\uD55C\uAE00S.sdb",
   selectedStrongBibleEng: "KJV_S.sdb",
   selectedStrongLexiconKor: "HebGrkKo.dct",
@@ -11043,7 +11047,14 @@ var DEFAULT_SETTINGS = {
   strongAutoSync: false,
   mapAutoSync: false,
   strongRefColorLight: "#1e40af",
-  strongRefColorDark: "#58a6ff"
+  strongRefColorDark: "#58a6ff",
+  bibleDataDownloadUrl: "https://github.com/hyod9866/ObsidianBibleFinder/releases/download/v1.2.4/sermon_bible_data.zip",
+  compareSelectedVersions: [],
+  compareClearOnSearch: true,
+  compareFontSize: 15,
+  compareAutoSync: false,
+  compareVerseNumFormat: "paren",
+  strongFontSize: 15
 };
 var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
   constructor() {
@@ -11057,6 +11068,53 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
     this.dctJsonCache = {};
     this.biblePlaces = [];
     this.statusBarItem = null;
+    this.lastActiveMarkdownView = null;
+    this._lastTouchTarget = null;
+    this._manualSearchActive = false;
+    this._manualSearchLine = null;
+    this._manualSearchFile = null;
+    this._loadingBiblePromise = null;
+  }
+  getCurrentEditorCursorPos() {
+    let editor = null;
+    let filePath = null;
+    const activeView = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
+    if (activeView && activeView.editor) {
+      editor = activeView.editor;
+      if (activeView.file) filePath = activeView.file.path;
+    } else if (this.lastActiveMarkdownView && this.lastActiveMarkdownView.editor) {
+      editor = this.lastActiveMarkdownView.editor;
+      if (this.lastActiveMarkdownView.file) filePath = this.lastActiveMarkdownView.file.path;
+    } else {
+      editor = this.getTargetEditor();
+    }
+    if (editor && editor.getCursor) {
+      try {
+        const cur = editor.getCursor();
+        if (cur && typeof cur.line === "number") {
+          return { line: cur.line, file: filePath };
+        }
+      } catch (e) {}
+    }
+    return null;
+  }
+  markManualSearch() {
+    const curPos = this.getCurrentEditorCursorPos();
+    this._manualSearchActive = true;
+    this._manualSearchLine = curPos ? curPos.line : null;
+    this._manualSearchFile = curPos ? curPos.file : null;
+  }
+  getTargetEditor() {
+    if (this.lastActiveMarkdownView && this.lastActiveMarkdownView.editor) {
+      return this.lastActiveMarkdownView.editor;
+    }
+    const active = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
+    if (active && active.editor) return active.editor;
+    const leaves = this.app.workspace.getLeavesOfType("markdown");
+    for (const leaf of leaves) {
+      if (leaf.view && leaf.view.editor) return leaf.view.editor;
+    }
+    return null;
   }
   async onload() {
     await this.loadSettings();
@@ -11066,6 +11124,11 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
       this.customBookMap = {};
     }
     await this.loadBibleData();
+    this.registerEvent(this.app.workspace.on("active-leaf-change", (leaf) => {
+      if (leaf && leaf.view instanceof import_obsidian.MarkdownView) {
+        this.lastActiveMarkdownView = leaf.view;
+      }
+    }));
     this.addCommand({
       id: "reload-bible-data",
       name: "\uC131\uACBD \uB370\uC774\uD130 \uC0C8\uB85C\uACE0\uCE68 (Reload Bible Data)",
@@ -11135,26 +11198,87 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
         }
       ]
     });
+
+    // 편집 모드(에디터)에서 Shift+Enter 성경 장절 치환 가로채기 (CodeMirror 6 줄바꿈보다 먼저 낚아챔)
+    this.registerDomEvent(
+      document,
+      "keydown",
+      (e) => {
+        if (e.key === "Enter" && e.shiftKey && !e.isComposing && !e.altKey && !e.ctrlKey && !e.metaKey) {
+          try {
+            const activeView = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
+            if (!activeView || !activeView.editor) return;
+            const editor = activeView.editor;
+            const cursor = editor.getCursor();
+            const lineText = editor.getLine(cursor.line);
+            const sel = editor.getSelection ? editor.getSelection() : "";
+            const targetText = sel && sel.trim().length > 0 ? sel : lineText;
+            const testRx = /(?:[\(\[\{<])?((?:[1-3]\s*)?[가-힣a-zA-Z]{1,10}(?:[1-3]서)?)\s*(\d{1,3})(?:\s*[:：]\s*(\d{1,3}(?:\s*[-~–]\s*\d{1,3}|\s*,\s*\d{1,3})*))?(?:[\)\]\}>])?/;
+            const m = targetText.match(testRx);
+            if (m) {
+              const sb = getStandardBookCode(m[1], this.customBookMap);
+              if (BIBLE_ORDER_MAP.has(sb)) {
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                this.replaceBibleLink(editor);
+              }
+            }
+          } catch (err) {}
+        }
+      },
+      true
+    );
     this.addCommand({
       id: "search-bible-word",
       name: "\uC131\uACBD \uAD6C\uC808 \uB2E4\uC911 \uB2E8\uC5B4 \uAC80\uC0C9 (Search Bible Word AND)",
-      editorCallback: (editor) => {
+      editorCallback: (editor, view) => {
         let defaultQuery = "";
+        const savedCursor = editor.getCursor ? { ...editor.getCursor() } : null;
+        const savedLineText = savedCursor && typeof editor.getLine === "function" ? editor.getLine(savedCursor.line) : null;
+        const savedTopLineText = typeof editor.getLine === "function" ? editor.getLine(0) : null;
+        const savedSelection = editor.listSelections ? editor.listSelections().map((s) => ({
+          anchor: { ...s.anchor },
+          head: { ...s.head }
+        })) : null;
+        const leaf = (view && view.leaf) || this.app.workspace.activeLeaf;
         const selection = editor.getSelection();
         if (selection && selection.trim().length > 0) {
           defaultQuery = selection.trim();
-        } else {
-          const cursor = editor.getCursor();
-          const line = editor.getLine(cursor.line);
-          const wordRange = this.getWordAt(line, cursor.ch);
+        } else if (savedCursor) {
+          const line = editor.getLine(savedCursor.line);
+          const wordRange = this.getWordAt(line, savedCursor.ch);
           if (wordRange) {
             defaultQuery = line.substring(wordRange.start, wordRange.end).trim();
           }
         }
         const modal = new BibleMultiSearchModal(this.app, this, defaultQuery, (selectedVerse) => {
+          try {
+            if (leaf && this.app && this.app.workspace) {
+              this.app.workspace.setActiveLeaf(leaf, { focus: true });
+            }
+            if (typeof editor.focus === "function") {
+              editor.focus();
+            }
+            if (savedSelection && savedSelection.length > 0) {
+              const sel = savedSelection[0];
+              if (sel && sel.anchor && sel.head && (sel.anchor.line !== sel.head.line || sel.anchor.ch !== sel.head.ch)) {
+                if (typeof editor.setSelection === "function") {
+                  editor.setSelection(sel.anchor, sel.head);
+                }
+              } else if (savedCursor && typeof editor.setCursor === "function") {
+                editor.setCursor(savedCursor);
+              }
+            } else if (savedCursor && typeof editor.setCursor === "function") {
+              editor.setCursor(savedCursor);
+            }
+          } catch (e) {}
           const formatted = this.assembleVerses([selectedVerse], false, modal.currentSearchVersion);
           editor.replaceSelection(formatted);
-        });
+          if (typeof editor.focus === "function") {
+            editor.focus();
+          }
+        }, editor, savedCursor, savedSelection, leaf, savedLineText, savedTopLineText);
         modal.open();
       },
       hotkeys: [
@@ -11176,9 +11300,21 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
       console.error("\uC2E4\uC2DC\uAC04 \uC131\uACBD \uC9C0\uBA85 \uB370\uC774\uD130 \uB85C\uB4DC \uC2E4\uD328:", e);
       this.biblePlaces = [];
     }
+    try {
+      (0, import_obsidian.addIcon)(
+        "strong-s",
+        '<path d="M 72 30 C 72 20 62 15 50 15 C 36 15 26 22 26 34 C 26 46 38 51 51 54 C 64 57 74 62 74 74 C 74 86 64 93 50 93 C 36 93 26 86 25 76" fill="none" stroke="currentColor" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>'
+      );
+    } catch (e) {
+      console.warn("addIcon strong-s failed:", e);
+    }
     this.registerView(VIEW_TYPE_STRONG_BIBLE, (leaf) => new StrongBibleView(leaf, this));
     this.registerView(VIEW_TYPE_BIBLE_MAP, (leaf) => new BibleMapView(leaf, this));
-    this.addRibbonIcon("book-open", "\uC2A4\uD2B8\uB871 \uC6D0\uC5B4 \uC131\uACBD \uC5F4\uAE30", () => {
+    this.registerView(VIEW_TYPE_BIBLE_COMPARE, (leaf) => new BibleCompareView(leaf, this));
+    this.addRibbonIcon("columns", "성경 역본 비교 열기", () => {
+      this.activateCompareView();
+    });
+    this.addRibbonIcon("strong-s", "\uC2A4\uD2B8\uB871 \uC6D0\uC5B4 \uC131\uACBD \uC5F4\uAE30", () => {
       this.activateStrongView();
     });
     this.addRibbonIcon("map-pin", "\uC131\uACBD \uC9C0\uB3C4 \uC5F4\uAE30", () => {
@@ -11203,6 +11339,46 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
       id: "toggle-bible-map-view",
       name: "\uC131\uACBD \uC9C0\uB3C4 \uCC3D \uC5F4\uAE30/\uB2EB\uAE30 \uD1A0\uAE00 (Toggle Bible Map)",
       callback: () => this.toggleMapView()
+    });
+    this.addCommand({
+      id: "open-bible-compare-view",
+      name: "성경 역본 비교 창 열기 (Open Bible Compare View)",
+      callback: () => this.activateCompareView()
+    });
+    this.addCommand({
+      id: "toggle-bible-compare-view",
+      name: "성경 역본 비교 창 열기/닫기 토글 (Toggle Bible Compare View)",
+      callback: () => this.toggleCompareView()
+    });
+    this.addCommand({
+      id: "toggle-compare-strong-view",
+      name: "성경 역본 비교 ↔ 원어(스트롱) 화면 전환 토글 (Switch between Compare and Strong's)",
+      callback: () => this.toggleBetweenStrongAndCompare()
+    });
+    this.addCommand({
+      id: "lookup-bible-compare-ref",
+      name: "선택한 장절 역본 비교 창에서 보기 (Look up reference in Compare View)",
+      editorCallback: (editor) => {
+        const selection = editor.getSelection().trim();
+        if (selection) {
+          this.activateCompareView(selection);
+        } else {
+          const cursor = editor.getCursor();
+          const line = editor.getLine(cursor.line);
+          const regex = /(?:[\(\[\{<])?((?:[1-3]\s*)?[가-힣a-zA-Z]{1,10}(?:[1-3]서)?)\s*(\d{1,3})(?:\s*[:：]\s*(\d{1,3})(?:\s*[-~–,]\s*\d{1,3})*)?(?:[\)\]\}>])?/;
+          const match = line.match(regex);
+          if (match) {
+            this.activateCompareView(match[0]);
+          } else {
+            this.activateCompareView();
+          }
+        }
+      }
+    });
+    this.addCommand({
+      id: "focus-active-bible-search",
+      name: "성경 검색창으로 바로 가기 (Focus Bible Search)",
+      callback: () => this.focusActiveBibleSearch()
     });
     this.addCommand({
       id: "convert-sdb-to-json",
@@ -11303,7 +11479,7 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
         } else {
           const cursor = editor.getCursor();
           const line = editor.getLine(cursor.line);
-          const regex = /(?:[\(\[\{])?([가-힣a-zA-Z0-9]{1,6})\s*(\d+)(?:[:：](\d+))?(?:[\)\]\}])?/;
+          const regex = /(?:[\(\[\{<])?((?:[1-3]\s*)?[가-힣a-zA-Z]{1,10}(?:[1-3]서)?)\s*(\d{1,3})(?:\s*[:：]\s*(\d{1,3})(?:\s*[-~–,]\s*\d{1,3})*)?(?:[\)\]\}>])?/;
           const match = line.match(regex);
           if (match) {
             this.activateStrongView(match[0]);
@@ -11357,13 +11533,103 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
         }
       }
     }));
-    this.registerDomEvent(document, "click", () => {
-      this.handleCursorActivity();
-    });
-    this.registerDomEvent(document, "keyup", (evt) => {
-      if (evt.key.startsWith("Arrow") || evt.key === "Backspace" || evt.key === "Enter" || evt.key === " " || evt.key === "Spacebar") {
-        this.handleCursorActivity();
+    const triggerCursorSync = (evt) => {
+      // 입력창(INPUT/TEXTAREA) 조작 중이거나 사이드바 뷰 조작 중일 때는 커서 연동 무시
+      if (evt && evt.target) {
+        const tag = evt.target.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || (evt.target.isContentEditable && !(typeof evt.target.closest === "function" && evt.target.closest(".cm-editor")))) {
+          return;
+        }
+        if (typeof evt.target.closest === "function") {
+          if (evt.target.closest(".strong-bible-view-container") || evt.target.closest(".bible-compare-container") || evt.target.closest(".bible-map-container")) {
+            return;
+          }
+        }
       }
+
+      let clickedLine = null;
+      if (evt && evt.target && typeof evt.target.closest === "function") {
+        const cmLine = evt.target.closest(".cm-line");
+        if (cmLine && cmLine.textContent) {
+          clickedLine = cmLine.textContent;
+        }
+      }
+      this.handleCursorActivity(clickedLine);
+      setTimeout(() => this.handleCursorActivity(), 40);
+      setTimeout(() => this.handleCursorActivity(), 150);
+    };
+
+    this.registerDomEvent(document, "click", triggerCursorSync);
+    this.registerDomEvent(document, "mouseup", triggerCursorSync);
+    this.registerDomEvent(document, "touchend", triggerCursorSync);
+
+    let keyupDebounceTimer = null;
+    this.registerDomEvent(document, "keyup", (evt) => {
+      if (evt && evt.target) {
+        const tag = evt.target.tagName;
+        if (tag === "INPUT" || tag === "TEXTAREA" || (evt.target.isContentEditable && !(typeof evt.target.closest === "function" && evt.target.closest(".cm-editor")))) {
+          return;
+        }
+      }
+      const k = evt && evt.key ? evt.key : "";
+      if (k.startsWith("Arrow") || k === "Backspace" || k === "Enter" || k === " " || k === "Spacebar" || k === "PageUp" || k === "PageDown") {
+        this.handleCursorActivity();
+      } else {
+        if (keyupDebounceTimer) clearTimeout(keyupDebounceTimer);
+        keyupDebounceTimer = setTimeout(() => {
+          this.handleCursorActivity();
+        }, 300);
+      }
+    });
+
+    let editorChangeDebounceTimer = null;
+    this.registerEvent(this.app.workspace.on("editor-change", () => {
+      if (editorChangeDebounceTimer) clearTimeout(editorChangeDebounceTimer);
+      editorChangeDebounceTimer = setTimeout(() => {
+        this.handleCursorActivity();
+      }, 300);
+    }));
+
+    this.registerEvent(this.app.workspace.on("active-leaf-change", (leaf) => {
+      if (leaf && leaf.view instanceof import_obsidian.MarkdownView) {
+        this.lastActiveMarkdownView = leaf.view;
+        this.handleCursorActivity();
+        setTimeout(() => this.handleCursorActivity(), 50);
+      }
+    }));
+    this.app.workspace.onLayoutReady(() => {
+      try {
+        const v = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
+        if (v) this.lastActiveMarkdownView = v;
+        else {
+          const leaves = this.app.workspace.getLeavesOfType("markdown");
+          if (leaves.length && leaves[0].view) this.lastActiveMarkdownView = leaves[0].view;
+        }
+      } catch (e) {}
+    });
+    this.addCommand({
+      id: "smm-install-bible-data",
+      name: "성경 · 원어(스트롱) · 글꼴 데이터 원클릭 자동 설치",
+      callback: () => smmDownloadAndInstallData(this)
+    });
+    this.app.workspace.onLayoutReady(async () => {
+      try {
+        const ad = this.app.vault.adapter;
+        const bibles = await ad.exists('_bibles');
+        const strong = (await ad.exists('_strong')) || (await ad.exists('_strong_json'));
+        if (!bibles && !strong) {
+          const n = new import_obsidian.Notice(
+            '📖 [Bible Finder] 성경·스트롱 원어 데이터가 없습니다.\n여기를 클릭하면 원클릭 자동 설치가 시작됩니다.',
+            15000
+          );
+          if (n && n.noticeEl) {
+            n.noticeEl.style.cursor = 'pointer';
+            n.noticeEl.addEventListener('click', () => {
+              smmDownloadAndInstallData(this);
+            });
+          }
+        }
+      } catch (e) {}
     });
   }
   isOnMobile() {
@@ -11372,6 +11638,9 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
   }
   getJsonFolderPath() {
     const raw = this.settings.bethlehemWinFolder || "_strong";
+    if (raw === "_strong" || raw.includes("D-kanghyodgeun")) {
+      return "_strong_json";
+    }
     const parts = raw.replace(/\\/g, "/").split("/").filter(Boolean);
     const lastFolder = parts.pop() || "_strong";
     return lastFolder + "_json";
@@ -11459,8 +11728,9 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
     var _a, _b;
     if (this.SQL)
       return this.SQL;
-    const isDesktop = typeof window !== "undefined" && ((_b = (_a = window.process) == null ? void 0 : _a.versions) == null ? void 0 : _b.node);
-    if (!isDesktop) {
+    // 데스크톱(Node) 뿐 아니라 아이패드/모바일(WebAssembly 지원 WebView)에서도 엔진을 띄운다.
+    const hasWasm = typeof WebAssembly !== "undefined" && typeof WebAssembly.instantiate === "function";
+    if (!hasWasm) {
       return null;
     }
     if (!this._sqlInitPromise) {
@@ -11477,7 +11747,7 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
         }
       })();
     }
-    const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 1e4));
+    const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), 3e4));
     const result = await Promise.race([this._sqlInitPromise, timeoutPromise]);
     if (result)
       this.SQL = result;
@@ -11498,7 +11768,14 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
           const vaultPath = this.getVaultBasePath();
           fullPath = joinPaths(vaultPath, folderPath);
         }
-        const filePath = joinPaths(fullPath, fileName);
+        let filePath = joinPaths(fullPath, fileName);
+        if (!fs.existsSync(filePath)) {
+          const vaultPath = this.getVaultBasePath();
+          const fallbackPath = joinPaths(vaultPath, "_strong", fileName);
+          if (fs.existsSync(fallbackPath)) {
+            filePath = fallbackPath;
+          }
+        }
         if (fs.existsSync(filePath)) {
           const buffer = fs.readFileSync(filePath);
           return buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength);
@@ -11507,8 +11784,18 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
         console.error("Node fs \uB85C\uB4DC \uC2E4\uD328, vault adapter \uD3F4\uBC31:", e);
       }
     }
-    const finalPath = joinPaths(folderPath, fileName).replace(/\\/g, "/");
-    return await this.app.vault.adapter.readBinary(finalPath);
+    let relFolder = (folderPath || "").replace(/\\/g, "/");
+    const vaultPath = (this.getVaultBasePath() || "").replace(/\\/g, "/");
+    if (vaultPath && relFolder.startsWith(vaultPath)) {
+      relFolder = relFolder.slice(vaultPath.length);
+    }
+    while (relFolder.startsWith("/")) relFolder = relFolder.slice(1);
+    const finalPath = joinPaths(relFolder || "_strong", fileName).replace(/\\/g, "/");
+    try {
+      return await this.app.vault.adapter.readBinary(finalPath);
+    } catch (e) {
+      return await this.app.vault.adapter.readBinary(`_strong/${fileName}`);
+    }
   }
   async getDbConnection(folderPath, fileName, isDct, showNotice = true) {
     const cacheKey = folderPath + "/" + fileName;
@@ -11535,72 +11822,193 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
     return db;
   }
   async scanFolderFiles(folderPath) {
-    const sdbs = [];
-    const dcts = [];
-    if (typeof window !== "undefined" && window.process && window.process.versions && window.process.versions.node) {
-      try {
-        const fs = require("fs");
-        let resolvedPath = folderPath;
-        if (!isAbsolutePath(folderPath)) {
-          const vaultPath = this.getVaultBasePath();
-          resolvedPath = joinPaths(vaultPath, folderPath);
-        }
-        if (fs.existsSync(resolvedPath)) {
-          const files = fs.readdirSync(resolvedPath);
-          for (const f of files) {
-            const lower = f.toLowerCase();
-            if (lower.endsWith(".sdb") || lower.endsWith(".cdb"))
-              sdbs.push(f);
-            if (lower.endsWith(".dct"))
-              dcts.push(f);
+    let sdbs = [];
+    let dcts = [];
+    const tryScan = async (target) => {
+      let s = [];
+      let d = [];
+      if (typeof window !== "undefined" && window.process && window.process.versions && window.process.versions.node) {
+        try {
+          const fs = require("fs");
+          let resolvedPath = target;
+          if (!isAbsolutePath(target)) {
+            const vaultPath2 = this.getVaultBasePath();
+            resolvedPath = joinPaths(vaultPath2, target);
           }
-          return { sdbs, dcts };
+          if (fs.existsSync(resolvedPath)) {
+            const files = fs.readdirSync(resolvedPath);
+            for (const f of files) {
+              const lower = f.toLowerCase();
+              if (lower.endsWith(".sdb") || lower.endsWith(".cdb"))
+                s.push(f);
+              if (lower.endsWith(".dct"))
+                d.push(f);
+            }
+            return { s, d };
+          }
+        } catch (e) {
+          console.error("scanFolderFiles Node fs scan fail:", e);
+        }
+      }
+      try {
+        let relTarget = (target || "").replace(/\\/g, "/");
+        const vaultPath2 = (this.getVaultBasePath() || "").replace(/\\/g, "/");
+        if (vaultPath2 && relTarget.startsWith(vaultPath2)) {
+          relTarget = relTarget.slice(vaultPath2.length);
+        }
+        while (relTarget.startsWith("/")) relTarget = relTarget.slice(1);
+        const listResult = await this.app.vault.adapter.list(relTarget || "_strong");
+        for (const f of listResult.files) {
+          const name = f.split(/[/\\]/).pop() || "";
+          const lower = name.toLowerCase();
+          if (lower.endsWith(".sdb") || lower.endsWith(".cdb"))
+            s.push(name);
+          if (lower.endsWith(".dct"))
+            d.push(name);
         }
       } catch (e) {
-        console.error("scanFolderFiles Node fs scan fail:", e);
       }
-    }
-    try {
-      let relativePath = folderPath;
-      const listResult = await this.app.vault.adapter.list(relativePath);
-      for (const f of listResult.files) {
-        const name = f.split(/[/\\]/).pop() || "";
-        const lower = name.toLowerCase();
-        if (lower.endsWith(".sdb") || lower.endsWith(".cdb"))
-          sdbs.push(name);
-        if (lower.endsWith(".dct"))
-          dcts.push(name);
-      }
-    } catch (e) {
-      console.error("Vault list error:", e);
+      return { s, d };
+    };
+
+    const first = await tryScan(folderPath);
+    sdbs = first.s;
+    dcts = first.d;
+    if (sdbs.length === 0 && dcts.length === 0 && folderPath !== "_strong") {
+      const fb = await tryScan("_strong");
+      sdbs = fb.s;
+      dcts = fb.d;
     }
     return { sdbs, dcts };
   }
-  handleCursorActivity() {
+  handleCursorActivity(explicitLine = null) {
+    let line = typeof explicitLine === "string" ? explicitLine : null;
+    let editor = null;
+    let curCursor = null;
+    let activeFilePath = null;
+
     const activeView = this.app.workspace.getActiveViewOfType(import_obsidian.MarkdownView);
-    if (!activeView)
-      return;
-    const editor = activeView.editor;
+    if (activeView && activeView.editor) {
+      editor = activeView.editor;
+      this.lastActiveMarkdownView = activeView;
+      if (activeView.file) activeFilePath = activeView.file.path;
+    } else if (this.lastActiveMarkdownView && this.lastActiveMarkdownView.editor) {
+      editor = this.lastActiveMarkdownView.editor;
+      if (this.lastActiveMarkdownView.file) activeFilePath = this.lastActiveMarkdownView.file.path;
+    } else {
+      editor = this.getTargetEditor();
+    }
+
+    if (editor && editor.getCursor) {
+      try {
+        curCursor = editor.getCursor();
+        if (!line && curCursor && typeof curCursor.line === "number") {
+          line = editor.getLine(curCursor.line);
+        }
+      } catch (e) {}
+    }
+
+    // 커서(포커스)가 검색창(INPUT, TEXTAREA)이나 사이드바 내부에 있으면 에디터 연동이 검색창을 덮어쓰지 않음!
+    const activeEl = document.activeElement;
+    if (activeEl && typeof explicitLine !== "string") {
+      const tag = activeEl.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") {
+        return;
+      }
+      if (typeof activeEl.closest === "function") {
+        if (activeEl.closest(".strong-bible-view-container") || activeEl.closest(".bible-compare-container") || activeEl.closest(".bible-map-container")) {
+          return;
+        }
+      }
+    }
+
+    if (!line || typeof line !== "string") return;
+
     try {
-      const cursor = editor.getCursor();
-      const line = editor.getLine(cursor.line);
-      const strongLeaf = this.app.workspace.getLeavesOfType(VIEW_TYPE_STRONG_BIBLE)[0];
-      if (strongLeaf) {
-        const strongView = strongLeaf.view;
-        if (strongView && this.settings.strongAutoSync) {
-          const regex = /(?:[\(\[\{])?([가-힣a-zA-Z0-9]{1,6})\s*(\d+)(?:[:：](\d+))?(?:[\)\]\}])?/;
-          const match = line.match(regex);
-          if (match) {
-            const ref = match[0];
-            const standardBook = getStandardBookCode(match[1], this.customBookMap);
-            if (BIBLE_ORDER_MAP.has(standardBook)) {
-              if (strongView.currentSearch !== ref) {
-                if (strongView.searchEl) {
-                  strongView.searchEl.value = ref;
+      const regex = /(?:[\(\[\{<])?((?:[1-3]\s*)?[가-힣a-zA-Z]{1,10}(?:[1-3]서)?)\s*(\d{1,3})(?:\s*[:：장]\s*(\d{1,3})(?:\s*[-~–,]\s*\d{1,3})*)?(?:\s*절)?(?:[\)\]\}>])?/;
+      const match = line.match(regex);
+      if (match) {
+        const ref = match[0];
+        const cleanRef = ref.replace(/^[\(\[\{<【「『"'\s]+|[\)\]\}>】」』"'\s.]+$/g, "").trim();
+        const standardBook = getStandardBookCode(match[1], this.customBookMap);
+        if (BIBLE_ORDER_MAP.has(standardBook)) {
+          // 1. 스트롱 원어 성경
+          try {
+            if (this.settings.strongAutoSync || this.settings.compareAutoSync) {
+              let strongLeaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_STRONG_BIBLE);
+              if (!strongLeaves || strongLeaves.length === 0) {
+                const found = [];
+                this.app.workspace.iterateAllLeaves((l) => {
+                  if (l && l.view && typeof l.view.getViewType === "function" && l.view.getViewType() === VIEW_TYPE_STRONG_BIBLE) {
+                    found.push(l);
+                  }
+                });
+                strongLeaves = found;
+              }
+              for (const strongLeaf of strongLeaves) {
+                if (strongLeaf && strongLeaf.view) {
+                  const strongView = strongLeaf.view;
+                  if (strongView.currentSearch !== cleanRef) {
+                    if (strongView.searchEl) strongView.searchEl.value = cleanRef;
+                    if (typeof strongView.performSearch === "function") {
+                      strongView.performSearch(cleanRef);
+                    }
+                  }
                 }
-                strongView.performSearch(ref);
               }
             }
+          } catch (errStrong) {
+            console.error("StrongBible auto-sync error:", errStrong);
+          }
+
+          // 2. 성경 역본 비교
+          try {
+            if (this.settings.compareAutoSync || this.settings.strongAutoSync) {
+              let compareLeaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_BIBLE_COMPARE);
+              if (!compareLeaves || compareLeaves.length === 0) {
+                const found = [];
+                this.app.workspace.iterateAllLeaves((l) => {
+                  if (l && l.view && typeof l.view.getViewType === "function" && l.view.getViewType() === VIEW_TYPE_BIBLE_COMPARE) {
+                    found.push(l);
+                  }
+                });
+                compareLeaves = found;
+              }
+              for (const compareLeaf of compareLeaves) {
+                if (compareLeaf && compareLeaf.view) {
+                  const compareView = compareLeaf.view;
+                  const sInput = typeof compareView.getSearchInput === "function" ? compareView.getSearchInput() : compareView.searchEl;
+                  if (sInput && sInput.value !== cleanRef) sInput.value = cleanRef;
+                  if (compareView.currentQuery !== cleanRef || !compareView.history || compareView.history.length === 0) {
+                    if (typeof compareView.performSearch === "function") {
+                      compareView.performSearch(cleanRef);
+                    }
+                  }
+                }
+              }
+            }
+          } catch (errCompare) {
+            console.error("BibleCompare auto-sync error:", errCompare);
+          }
+
+          // 3. 주석 찾기 (sermon-commentary-view) 동기화
+          try {
+            if (this.settings.compareAutoSync || this.settings.strongAutoSync) {
+              const commLeaves = this.app.workspace.getLeavesOfType("sermon-commentary-view");
+              for (const commLeaf of commLeaves) {
+                if (commLeaf && commLeaf.view) {
+                  const commView = commLeaf.view;
+                  if (commView.inputEl && commView.inputEl.value !== cleanRef) {
+                    commView.inputEl.value = cleanRef;
+                  }
+                  if (typeof commView.search === "function") {
+                    commView.search(cleanRef, true);
+                  }
+                }
+              }
+            }
+          } catch (errComm) {
+            console.error("Commentary auto-sync error:", errComm);
           }
         }
       }
@@ -11636,6 +12044,7 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
     return this.biblePlaces.some((p) => p.names.includes(cleanWord));
   }
   async activateStrongView(initialSearch = "") {
+    this._lastFocusedBibleViewType = VIEW_TYPE_STRONG_BIBLE;
     const { workspace } = this.app;
     let leaf = workspace.getLeavesOfType(VIEW_TYPE_STRONG_BIBLE)[0];
     if (!leaf) {
@@ -11647,13 +12056,24 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
     }
     if (leaf) {
       workspace.revealLeaf(leaf);
-      if (initialSearch) {
-        const view = leaf.view;
-        if (view.searchEl) {
-          view.searchEl.value = initialSearch;
-          view.performSearch(initialSearch);
-        }
+      if (workspace.rightSplit && typeof workspace.rightSplit.expand === "function") {
+        workspace.rightSplit.expand();
       }
+      if (initialSearch) {
+        const doSearch = () => {
+          const sLeaf = workspace.getLeavesOfType(VIEW_TYPE_STRONG_BIBLE)[0];
+          if (sLeaf && sLeaf.view) {
+            const view = sLeaf.view;
+            if (view.searchEl) view.searchEl.value = initialSearch;
+            if (typeof view.performSearch === "function") {
+              view.performSearch(initialSearch);
+            }
+          }
+        };
+        setTimeout(doSearch, 60);
+        setTimeout(doSearch, 220);
+      }
+      this.doFocusStrong(leaf);
     }
   }
   async activateMapView(placeName = "") {
@@ -11668,6 +12088,9 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
     }
     if (leaf) {
       workspace.revealLeaf(leaf);
+      if (workspace.rightSplit && typeof workspace.rightSplit.expand === "function") {
+        workspace.rightSplit.expand();
+      }
       if (placeName) {
         setTimeout(() => {
           const mapLeaf = workspace.getLeavesOfType(VIEW_TYPE_BIBLE_MAP)[0];
@@ -11699,6 +12122,424 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
       this.activateMapView();
     }
   }
+  async activateCompareView(initialSearch = "") {
+    this._lastFocusedBibleViewType = VIEW_TYPE_BIBLE_COMPARE;
+    const { workspace } = this.app;
+    let leaf = workspace.getLeavesOfType(VIEW_TYPE_BIBLE_COMPARE)[0];
+    if (!leaf) {
+      const rightLeaf = workspace.getRightLeaf(false);
+      if (rightLeaf) {
+        leaf = rightLeaf;
+        await leaf.setViewState({ type: VIEW_TYPE_BIBLE_COMPARE, active: true });
+      }
+    }
+    if (leaf) {
+      workspace.revealLeaf(leaf);
+      if (workspace.rightSplit && typeof workspace.rightSplit.expand === "function") {
+        workspace.rightSplit.expand();
+      }
+      if (initialSearch) {
+        const doSearch = () => {
+          let cLeaves = workspace.getLeavesOfType(VIEW_TYPE_BIBLE_COMPARE);
+          if (!cLeaves || cLeaves.length === 0) {
+            const found = [];
+            workspace.iterateAllLeaves((l) => {
+              if (l && l.view && l.view.getViewType && l.view.getViewType() === VIEW_TYPE_BIBLE_COMPARE) {
+                found.push(l);
+              }
+            });
+            cLeaves = found;
+          }
+          for (const cLeaf of cLeaves) {
+            if (cLeaf && cLeaf.view) {
+              const view = cLeaf.view;
+              const sInput = typeof view.getSearchInput === "function" ? view.getSearchInput() : view.searchEl;
+              if (sInput) sInput.value = initialSearch;
+              if (typeof view.performSearch === "function") {
+                view.performSearch(initialSearch);
+              }
+            }
+          }
+        };
+        setTimeout(doSearch, 60);
+        setTimeout(doSearch, 220);
+        setTimeout(doSearch, 500);
+      }
+      this.doFocusCompare(leaf);
+    }
+  }
+  toggleCompareView() {
+    const { workspace } = this.app;
+    const leaves = workspace.getLeavesOfType(VIEW_TYPE_BIBLE_COMPARE);
+    if (leaves.length > 0) {
+      leaves.forEach((leaf) => leaf.detach());
+    } else {
+      this.activateCompareView();
+    }
+  }
+  doFocusInput(inputEl) {
+    if (!inputEl) return;
+    try {
+      inputEl.focus();
+      if (typeof inputEl.select === "function") {
+        inputEl.select();
+      }
+      if (typeof inputEl.setSelectionRange === "function") {
+        inputEl.setSelectionRange(0, inputEl.value.length);
+      }
+    } catch (e) {
+      try {
+        if (typeof inputEl.select === "function") inputEl.select();
+      } catch (err) {}
+    }
+  }
+  doFocusCompare(leaf) {
+    this._lastFocusedBibleViewType = VIEW_TYPE_BIBLE_COMPARE;
+    const run = () => {
+      let targetLeaf = leaf;
+      if (!targetLeaf || !targetLeaf.view) {
+        const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_BIBLE_COMPARE);
+        targetLeaf = leaves[0];
+      }
+      if (targetLeaf) {
+        this.app.workspace.revealLeaf(targetLeaf);
+        if (this.app.workspace.rightSplit && typeof this.app.workspace.rightSplit.expand === "function") {
+          this.app.workspace.rightSplit.expand();
+        }
+        if (typeof this.app.workspace.setActiveLeaf === "function") {
+          try { this.app.workspace.setActiveLeaf(targetLeaf, { focus: true }); } catch (e) {}
+        }
+        if (targetLeaf.view) {
+          const input = typeof targetLeaf.view.getSearchInput === "function" ? targetLeaf.view.getSearchInput() : targetLeaf.view.searchEl;
+          this.doFocusInput(input);
+        }
+      }
+    };
+    run();
+    requestAnimationFrame(run);
+    setTimeout(run, 40);
+    setTimeout(run, 120);
+  }
+  doFocusStrong(leaf) {
+    this._lastFocusedBibleViewType = VIEW_TYPE_STRONG_BIBLE;
+    const run = () => {
+      let targetLeaf = leaf;
+      if (!targetLeaf || !targetLeaf.view) {
+        const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_STRONG_BIBLE);
+        targetLeaf = leaves[0];
+      }
+      if (targetLeaf) {
+        this.app.workspace.revealLeaf(targetLeaf);
+        if (this.app.workspace.rightSplit && typeof this.app.workspace.rightSplit.expand === "function") {
+          this.app.workspace.rightSplit.expand();
+        }
+        if (typeof this.app.workspace.setActiveLeaf === "function") {
+          try { this.app.workspace.setActiveLeaf(targetLeaf, { focus: true }); } catch (e) {}
+        }
+        if (targetLeaf.view) {
+          this.doFocusInput(targetLeaf.view.searchEl);
+        }
+      }
+    };
+    run();
+    requestAnimationFrame(run);
+    setTimeout(run, 40);
+    setTimeout(run, 120);
+  }
+  doFocusComm(leaf) {
+    this._lastFocusedBibleViewType = "sermon-commentary-view";
+    const run = () => {
+      let targetLeaf = leaf;
+      if (!targetLeaf || !targetLeaf.view) {
+        const leaves = this.app.workspace.getLeavesOfType("sermon-commentary-view");
+        targetLeaf = leaves[0];
+      }
+      if (targetLeaf) {
+        this.app.workspace.revealLeaf(targetLeaf);
+        if (this.app.workspace.rightSplit && typeof this.app.workspace.rightSplit.expand === "function") {
+          this.app.workspace.rightSplit.expand();
+        }
+        if (typeof this.app.workspace.setActiveLeaf === "function") {
+          try { this.app.workspace.setActiveLeaf(targetLeaf, { focus: true }); } catch (e) {}
+        }
+        if (targetLeaf.view) {
+          const input = targetLeaf.view.inputEl || targetLeaf.view.containerEl?.querySelector(".scf-input");
+          this.doFocusInput(input);
+        }
+      }
+    };
+    run();
+    requestAnimationFrame(run);
+    setTimeout(run, 40);
+    setTimeout(run, 120);
+  }
+  doFocusDict(leaf) {
+    this._lastFocusedBibleViewType = "sermon-bible-dictionary-view";
+    const run = () => {
+      let targetLeaf = leaf;
+      if (!targetLeaf || !targetLeaf.view) {
+        const leaves = this.app.workspace.getLeavesOfType("sermon-bible-dictionary-view");
+        targetLeaf = leaves[0];
+      }
+      if (targetLeaf) {
+        this.app.workspace.revealLeaf(targetLeaf);
+        if (this.app.workspace.rightSplit && typeof this.app.workspace.rightSplit.expand === "function") {
+          this.app.workspace.rightSplit.expand();
+        }
+        if (typeof this.app.workspace.setActiveLeaf === "function") {
+          try { this.app.workspace.setActiveLeaf(targetLeaf, { focus: true }); } catch (e) {}
+        }
+        if (targetLeaf.view) {
+          const input = targetLeaf.view.searchEl || targetLeaf.view.containerEl?.querySelector(".scf-dict-search-input");
+          this.doFocusInput(input);
+        }
+      }
+    };
+    run();
+    requestAnimationFrame(run);
+    setTimeout(run, 40);
+    setTimeout(run, 120);
+  }
+  isLeafCurrentlyVisible(leaf) {
+    if (!leaf || !leaf.containerEl) return false;
+    const el = leaf.containerEl;
+    if (!el.isConnected) return false;
+
+    const workspace = this.app.workspace;
+    // 1) 사이드바에 속해 있다면, 사이드바 자체가 접혀(collapsed) 있는지 확인
+    if (workspace.rightSplit && workspace.rightSplit.collapsed) {
+      if (workspace.rightSplit.containerEl && workspace.rightSplit.containerEl.contains(el)) {
+        return false;
+      }
+    }
+    if (workspace.leftSplit && workspace.leftSplit.collapsed) {
+      if (workspace.leftSplit.containerEl && workspace.leftSplit.containerEl.contains(el)) {
+        return false;
+      }
+    }
+
+    // 2) 탭 헤더 활성 상태 확인 (가장 확실한 탭 활성 판별)
+    if (leaf.tabHeaderEl) {
+      if (!leaf.tabHeaderEl.classList.contains("is-active")) {
+        return false;
+      }
+    } else if (leaf.parent && Array.isArray(leaf.parent.children) && typeof leaf.parent.currentTab === "number") {
+      if (leaf.parent.children[leaf.parent.currentTab] !== leaf) {
+        return false;
+      }
+    }
+
+    // 3) DOM 스타일 확인 (display: none 이거나 visibility: hidden 인 경우만 제외)
+    try {
+      const style = window.getComputedStyle(el);
+      if (style.display === "none" || style.visibility === "hidden") return false;
+    } catch (e) {}
+
+    return true;
+  }
+  async focusCompareSearch() {
+    this._lastFocusedBibleViewType = VIEW_TYPE_BIBLE_COMPARE;
+    let leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_BIBLE_COMPARE);
+    const visibleLeaf = leaves.find((l) => this.isLeafCurrentlyVisible(l));
+    if (!visibleLeaf) {
+      await this.activateCompareView();
+    } else {
+      this.doFocusCompare(visibleLeaf);
+    }
+  }
+  async focusStrongSearch() {
+    this._lastFocusedBibleViewType = VIEW_TYPE_STRONG_BIBLE;
+    let leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_STRONG_BIBLE);
+    const visibleLeaf = leaves.find((l) => this.isLeafCurrentlyVisible(l));
+    if (!visibleLeaf) {
+      await this.activateStrongView();
+    } else {
+      this.doFocusStrong(visibleLeaf);
+    }
+  }
+  async focusActiveBibleSearch(preferType = "") {
+    const { workspace } = this.app;
+
+    // 1. 현재 활성 탭(activeLeaf)이 직접 스트롱 성경, 역본 비교, 주석, 성경사전이라면 그 뷰의 검색창 포커스
+    const activeLeaf = workspace.activeLeaf;
+    const activeType = activeLeaf && activeLeaf.view && typeof activeLeaf.view.getViewType === "function" ? activeLeaf.view.getViewType() : "";
+    if (activeType === VIEW_TYPE_STRONG_BIBLE) {
+      this.doFocusStrong(activeLeaf);
+      return;
+    }
+    if (activeType === VIEW_TYPE_BIBLE_COMPARE) {
+      this.doFocusCompare(activeLeaf);
+      return;
+    }
+    if (activeType === "sermon-commentary-view") {
+      this.doFocusComm(activeLeaf);
+      return;
+    }
+    if (activeType === "sermon-bible-dictionary-view") {
+      this.doFocusDict(activeLeaf);
+      return;
+    }
+
+    // 2. 현재 사이드바나 작업 공간에 실제로 표시(visible) 중인 뷰 판별
+    let strongLeaves = workspace.getLeavesOfType(VIEW_TYPE_STRONG_BIBLE);
+    if (!strongLeaves || strongLeaves.length === 0) {
+      strongLeaves = [];
+      workspace.iterateAllLeaves((l) => {
+        if (l && l.view && typeof l.view.getViewType === "function" && l.view.getViewType() === VIEW_TYPE_STRONG_BIBLE) {
+          strongLeaves.push(l);
+        }
+      });
+    }
+
+    let compareLeaves = workspace.getLeavesOfType(VIEW_TYPE_BIBLE_COMPARE);
+    if (!compareLeaves || compareLeaves.length === 0) {
+      compareLeaves = [];
+      workspace.iterateAllLeaves((l) => {
+        if (l && l.view && typeof l.view.getViewType === "function" && l.view.getViewType() === VIEW_TYPE_BIBLE_COMPARE) {
+          compareLeaves.push(l);
+        }
+      });
+    }
+
+    let commLeaves = workspace.getLeavesOfType("sermon-commentary-view");
+    if (!commLeaves || commLeaves.length === 0) {
+      commLeaves = [];
+      workspace.iterateAllLeaves((l) => {
+        if (l && l.view && typeof l.view.getViewType === "function" && l.view.getViewType() === "sermon-commentary-view") {
+          commLeaves.push(l);
+        }
+      });
+    }
+
+    let dictLeaves = workspace.getLeavesOfType("sermon-bible-dictionary-view");
+    if (!dictLeaves || dictLeaves.length === 0) {
+      dictLeaves = [];
+      workspace.iterateAllLeaves((l) => {
+        if (l && l.view && typeof l.view.getViewType === "function" && l.view.getViewType() === "sermon-bible-dictionary-view") {
+          dictLeaves.push(l);
+        }
+      });
+    }
+
+    const visibleStrongLeaf = strongLeaves.find((l) => this.isLeafCurrentlyVisible(l));
+    const visibleCompareLeaf = compareLeaves.find((l) => this.isLeafCurrentlyVisible(l));
+    const visibleCommLeaf = commLeaves.find((l) => this.isLeafCurrentlyVisible(l));
+    const visibleDictLeaf = dictLeaves.find((l) => this.isLeafCurrentlyVisible(l));
+
+    // A) 마지막 사용/포커스 뷰가 화면에 보이는 경우 최우선 포커스!
+    if (this._lastFocusedBibleViewType === "sermon-bible-dictionary-view" && visibleDictLeaf) {
+      this.doFocusDict(visibleDictLeaf);
+      return;
+    }
+    if (this._lastFocusedBibleViewType === "sermon-commentary-view" && visibleCommLeaf) {
+      this.doFocusComm(visibleCommLeaf);
+      return;
+    }
+    if (this._lastFocusedBibleViewType === VIEW_TYPE_STRONG_BIBLE && visibleStrongLeaf) {
+      this.doFocusStrong(visibleStrongLeaf);
+      return;
+    }
+    if (this._lastFocusedBibleViewType === VIEW_TYPE_BIBLE_COMPARE && visibleCompareLeaf) {
+      this.doFocusCompare(visibleCompareLeaf);
+      return;
+    }
+
+    // B) 단 하나의 뷰만 보이는 경우 -> 해당 뷰로 포커스
+    if (visibleDictLeaf && !visibleStrongLeaf && !visibleCompareLeaf && !visibleCommLeaf) {
+      this.doFocusDict(visibleDictLeaf);
+      return;
+    }
+    if (visibleCommLeaf && !visibleStrongLeaf && !visibleCompareLeaf && !visibleDictLeaf) {
+      this.doFocusComm(visibleCommLeaf);
+      return;
+    }
+    if (visibleStrongLeaf && !visibleCompareLeaf && !visibleCommLeaf && !visibleDictLeaf) {
+      this.doFocusStrong(visibleStrongLeaf);
+      return;
+    }
+    if (visibleCompareLeaf && !visibleStrongLeaf && !visibleCommLeaf && !visibleDictLeaf) {
+      this.doFocusCompare(visibleCompareLeaf);
+      return;
+    }
+
+    // C) 여러 뷰가 동시에 보이는 경우 (창 분할 등): 보이는 것 중 우선순위 적용
+    if (visibleDictLeaf && this._lastFocusedBibleViewType === "sermon-bible-dictionary-view") {
+      this.doFocusDict(visibleDictLeaf);
+      return;
+    }
+    if (visibleCommLeaf && this._lastFocusedBibleViewType === "sermon-commentary-view") {
+      this.doFocusComm(visibleCommLeaf);
+      return;
+    }
+    if (visibleStrongLeaf && visibleCompareLeaf) {
+      if (this._lastFocusedBibleViewType === VIEW_TYPE_STRONG_BIBLE) {
+        this.doFocusStrong(visibleStrongLeaf);
+      } else {
+        this.doFocusCompare(visibleCompareLeaf);
+      }
+      return;
+    }
+    if (visibleDictLeaf) { this.doFocusDict(visibleDictLeaf); return; }
+    if (visibleCommLeaf) { this.doFocusComm(visibleCommLeaf); return; }
+    if (visibleStrongLeaf) { this.doFocusStrong(visibleStrongLeaf); return; }
+    if (visibleCompareLeaf) { this.doFocusCompare(visibleCompareLeaf); return; }
+
+    // D) 화면에 아무 성경 관련 뷰도 보이지 않는 경우: 마지막 사용 뷰 열기
+    if (this._lastFocusedBibleViewType === "sermon-bible-dictionary-view") {
+      try {
+        const scf = this.app.plugins?.plugins?.['sermon-commentary-finder'];
+        if (scf && typeof scf.activateDictionaryView === 'function') {
+          await scf.activateDictionaryView();
+          return;
+        }
+      } catch (e) {}
+    }
+    if (this._lastFocusedBibleViewType === "sermon-commentary-view") {
+      try {
+        const scf = this.app.plugins?.plugins?.['sermon-commentary-finder'];
+        if (scf && typeof scf.activateView === 'function') {
+          await scf.activateView();
+          return;
+        }
+      } catch (e) {}
+    }
+    if (this._lastFocusedBibleViewType === VIEW_TYPE_STRONG_BIBLE) {
+      await this.activateStrongView();
+    } else {
+      await this.activateCompareView();
+    }
+  }
+  toggleBetweenStrongAndCompare() {
+    const { workspace } = this.app;
+    const strongLeaves = workspace.getLeavesOfType(VIEW_TYPE_STRONG_BIBLE);
+    const compareLeaves = workspace.getLeavesOfType(VIEW_TYPE_BIBLE_COMPARE);
+
+    let curSearch = "";
+    if (strongLeaves.length > 0 && strongLeaves[0].view) {
+      curSearch = strongLeaves[0].view.currentSearch || (strongLeaves[0].view.searchEl ? strongLeaves[0].view.searchEl.value : "");
+    }
+    if (compareLeaves.length > 0 && compareLeaves[0].view) {
+      curSearch = curSearch || compareLeaves[0].view.currentQuery || (compareLeaves[0].view.searchEl ? compareLeaves[0].view.searchEl.value : "");
+    }
+
+    const activeLeaf = workspace.activeLeaf;
+    const activeType = activeLeaf && activeLeaf.view && typeof activeLeaf.view.getViewType === "function" ? activeLeaf.view.getViewType() : "";
+
+    const visibleStrongLeaf = strongLeaves.find((l) => this.isLeafCurrentlyVisible(l));
+    const visibleCompareLeaf = compareLeaves.find((l) => this.isLeafCurrentlyVisible(l));
+
+    if (activeType === VIEW_TYPE_STRONG_BIBLE || (visibleStrongLeaf && !visibleCompareLeaf)) {
+      this.activateCompareView(curSearch);
+    } else if (activeType === VIEW_TYPE_BIBLE_COMPARE || (visibleCompareLeaf && !visibleStrongLeaf)) {
+      this.activateStrongView(curSearch);
+    } else {
+      if (this._lastFocusedBibleViewType === VIEW_TYPE_STRONG_BIBLE) {
+        this.activateCompareView(curSearch);
+      } else {
+        this.activateStrongView(curSearch);
+      }
+    }
+  }
   onunload() {
     const dynStyle = document.getElementById("bible-finder-dynamic-style");
     if (dynStyle) dynStyle.remove();
@@ -11721,6 +12562,39 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
   }
   async loadSettings() {
     this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+    if (!this.settings.selectedStrongBibleKor) this.settings.selectedStrongBibleKor = "개역한글S.sdb";
+    if (!this.settings.selectedStrongBibleEng) this.settings.selectedStrongBibleEng = "KJV_S.sdb";
+    if (!this.settings.selectedStrongLexiconKor) this.settings.selectedStrongLexiconKor = "HebGrkKo.dct";
+    if (!this.settings.selectedStrongLexiconEng) this.settings.selectedStrongLexiconEng = "HebGrkEn.dct";
+    const unifiedSync = !!(this.settings.strongAutoSync || this.settings.compareAutoSync);
+    this.settings.strongAutoSync = unifiedSync;
+    this.settings.compareAutoSync = unifiedSync;
+
+    if (this.settings.bethlehemWinFolder) {
+      let folder = this.settings.bethlehemWinFolder.trim();
+      const vaultPath = (this.getVaultBasePath() || "").replace(/\\/g, "/");
+      const cleanFolder = folder.replace(/\\/g, "/");
+      if (vaultPath && cleanFolder.startsWith(vaultPath)) {
+        let rel = cleanFolder.slice(vaultPath.length);
+        while (rel.startsWith("/")) rel = rel.slice(1);
+        folder = rel || "_strong";
+        this.settings.bethlehemWinFolder = folder;
+      }
+      if (folder.includes("D-kanghyodgeun") || (!folder.includes("_strong") && isAbsolutePath(folder))) {
+        let exists = false;
+        if (typeof window !== "undefined" && window.process && window.process.versions && window.process.versions.node) {
+          try {
+            const fs = require("fs");
+            if (fs.existsSync(folder)) exists = true;
+          } catch (e) {}
+        }
+        if (!exists) {
+          this.settings.bethlehemWinFolder = "_strong";
+        }
+      }
+    } else {
+      this.settings.bethlehemWinFolder = "_strong";
+    }
   }
   applyStrongRefColor() {
     const ok = (c, d) => /^#[0-9a-fA-F]{6}$/.test(c || "") ? c : d;
@@ -11760,11 +12634,19 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
     if (this.bibles.size === 0)
       return null;
     if (this.settings.defaultVersion && this.bibles.has(this.settings.defaultVersion)) {
-      return this.bibles.get(this.settings.defaultVersion);
+      const b = this.bibles.get(this.settings.defaultVersion);
+      if (b && !b.name.includes("한문") && !b.name.includes("국한문"))
+        return b;
     }
-    const found = Array.from(this.bibles.values()).find((b) => b.name.includes("\uAC1C\uC5ED\uD55C\uAE00"));
+    const pure = Array.from(this.bibles.values()).find((b) => (b.name === "개역한글" || b.name === "개역한글.btx") && !b.name.includes("한문") && !b.name.includes("국한문"));
+    if (pure)
+      return pure;
+    const found = Array.from(this.bibles.values()).find((b) => b.name.includes("개역한글") && !b.name.includes("한문") && !b.name.includes("국한문"));
     if (found)
       return found;
+    const nonHanja = Array.from(this.bibles.values()).find((b) => !b.name.includes("한문") && !b.name.includes("국한문") && !b.name.startsWith("e"));
+    if (nonHanja)
+      return nonHanja;
     return this.bibles.values().next().value;
   }
   getActiveEnglishVersion() {
@@ -11801,45 +12683,54 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
     return start < end ? { start, end } : null;
   }
   async loadBibleData() {
-    this.bibles.clear();
-    const folderPath = this.settings.bibleFolder.trim();
-    if (!folderPath)
-      return;
-    try {
-      const adapter = this.app.vault.adapter;
-      const exists = await adapter.exists(folderPath);
-      if (!exists) {
-        console.log("\uBCA0\uB4E4\uB808\uD5F4 \uC131\uACBD \uD50C\uB7EC\uADF8\uC778: btx \uD3F4\uB354\uAC00 \uB514\uC2A4\uD06C \uC0C1\uC5D0 \uC874\uC7AC\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4. \uACBD\uB85C:", folderPath);
-        return;
-      }
-      const listResult = await adapter.list(folderPath);
-      const btxFilePaths = listResult.files.filter((p) => p.toLowerCase().endsWith(".btx"));
-      if (btxFilePaths.length === 0) {
-        console.log("\uBCA0\uB4E4\uB808\uD5F4 \uC131\uACBD \uD50C\uB7EC\uADF8\uC778: \uD3F4\uB354 \uB0B4\uC5D0 btx \uD30C\uC77C\uC774 \uC874\uC7AC\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4. \uACBD\uB85C:", folderPath);
-        return;
-      }
-      for (const filePath of btxFilePaths) {
-        try {
-          const text = await adapter.read(filePath);
-          const parts = filePath.split(/[/\\]/);
-          const fileNameWithExt = parts[parts.length - 1];
-          const versionName = fileNameWithExt.substring(0, fileNameWithExt.length - 4);
-          const parsedVersion = this.parseBtxText(filePath, versionName, text);
-          this.bibles.set(filePath, parsedVersion);
-        } catch (err) {
-          console.error(`\uC131\uACBD \uD30C\uC77C \uD30C\uC2F1 \uC5D0\uB7EC (${filePath}):`, err);
-        }
-      }
-    } catch (err) {
-      console.error("\uC131\uACBD \uB370\uC774\uD130 \uB85C\uCEEC \uB514\uC2A4\uD06C \uB85C\uB529 \uC911 \uC624\uB958 \uBC1C\uC0DD:", err);
+    if (this._loadingBiblePromise) {
+      return this._loadingBiblePromise;
     }
-    console.log(`\uBCA0\uB4E4\uB808\uD5F4 \uC131\uACBD \uD50C\uB7EC\uADF8\uC778: ${this.bibles.size}\uAC1C \uC131\uACBD \uB370\uC774\uD130 \uB85C\uB4DC \uC644\uB8CC.`);
+    this._loadingBiblePromise = (async () => {
+      const folderPath = this.settings.bibleFolder.trim();
+      if (!folderPath)
+        return;
+      try {
+        const adapter = this.app.vault.adapter;
+        const exists = await adapter.exists(folderPath);
+        if (!exists) {
+          console.log("\uBCA0\uB4E4\uB808\uD5F4 \uC131\uACBD \uD50C\uB7EC\uADF8\uC778: btx \uD3F4\uB354\uAC00 \uB514\uC2A4\uD06C \uC0C1\uC5D0 \uC874\uC7AC\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4. \uACBD\uB85C:", folderPath);
+          return;
+        }
+        const listResult = await adapter.list(folderPath);
+        const btxFilePaths = listResult.files.filter((p) => p.toLowerCase().endsWith(".btx"));
+        if (btxFilePaths.length === 0) {
+          console.log("\uBCA0\uB4E4\uB808\uD5F4 \uC131\uACBD \uD50C\uB7EC\uADF8\uC778: \uD3F4\uB354 \uB0B4\uC5D0 btx \uD30C\uC77C\uC774 \uC874\uC7AC\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4. \uACBD\uB85C:", folderPath);
+          return;
+        }
+        const newBibles = new Map();
+        for (const filePath of btxFilePaths) {
+          try {
+            const text = await adapter.read(filePath);
+            const parts = filePath.split(/[/\\]/);
+            const fileNameWithExt = parts[parts.length - 1];
+            const versionName = fileNameWithExt.substring(0, fileNameWithExt.length - 4);
+            const parsedVersion = this.parseBtxText(filePath, versionName, text);
+            newBibles.set(filePath, parsedVersion);
+          } catch (err) {
+            console.error(`\uC131\uACBD \uD30C\uC77C \uD30C\uC2F1 \uC5D0\uB7EC (${filePath}):`, err);
+          }
+        }
+        this.bibles = newBibles;
+      } catch (err) {
+        console.error("\uC131\uACBD \uB370\uC774\uD130 \uB85C\uCEEC \uB514\uC2A4\uD06C \uB85C\uB529 \uC911 \uC624\uB958 \uBC1C\uC0DD:", err);
+      } finally {
+        this._loadingBiblePromise = null;
+      }
+      console.log(`\uBCA0\uB4E4\uB808\uD5F4 \uC131\uACBD \uD50C\uB7EC\uADF8\uC778: ${this.bibles.size}\uAC1C \uC131\uACBD \uB370\uC774\uD130 \uB85C\uB4DC \uC644\uB8CC.`);
+    })();
+    return this._loadingBiblePromise;
   }
   parseBtxText(id, name, content) {
     const verses = [];
     const index = /* @__PURE__ */ new Map();
     const lines = content.split(/\r?\n/);
-    const btxRegex = /^([가-힣a-zA-Z0-9]{1,5})\s*(\d+)[:：](\d+)\s*(.*)$/;
+    const btxRegex = /^([가-힣\u4E00-\u9FFF\u3400-\u4DBF\uF900-\uFAFFa-zA-Z0-9]{1,6})\s*(\d+)[:：](\d+)\s*(.*)$/;
     for (const line of lines) {
       const cleanLine = line.trim();
       if (!cleanLine)
@@ -11911,12 +12802,24 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
       }
       return BIBLE_FULL_NAMES[v.book] || v.book;
     };
+    const formatVerseRefNums = (vList) => {
+      if (!vList || vList.length === 0) return "";
+      const nums = vList.map((v) => v.verse);
+      const parts = [];
+      let i = 0;
+      while (i < nums.length) {
+        let j = i;
+        while (j + 1 < nums.length && nums[j + 1] === nums[j] + 1) j++;
+        parts.push(j > i ? `${nums[i]}-${nums[j]}` : `${nums[i]}`);
+        i = j + 1;
+      }
+      return parts.join(",");
+    };
     const lines = [];
     if (opt === "newline-num" && verses.length > 1) {
       const firstV = verses[0];
-      const lastV = verses[verses.length - 1];
       const bookDisplay = getBookDisplay(firstV);
-      let rangeRefText = `${bookDisplay} ${firstV.chapter}:${firstV.verse}-${lastV.verse}`;
+      let rangeRefText = `${bookDisplay} ${firstV.chapter}:${formatVerseRefNums(verses)}`;
       rangeRefText = wrapBracket(rangeRefText, this.settings.bracketBook);
       lines.push(rangeRefText);
       verses.forEach((v) => {
@@ -11934,9 +12837,8 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
       });
     } else if (opt !== "full-ref" && verses.length > 1) {
       const firstV = verses[0];
-      const lastV = verses[verses.length - 1];
       const bookDisplay = getBookDisplay(firstV);
-      let rangeRefText = `${bookDisplay} ${firstV.chapter}:${firstV.verse}-${lastV.verse}`;
+      let rangeRefText = `${bookDisplay} ${firstV.chapter}:${formatVerseRefNums(verses)}`;
       rangeRefText = wrapBracket(rangeRefText, this.settings.bracketBook);
       const mergedContent = verses.map((v) => {
         let refText = "";
@@ -12065,67 +12967,138 @@ ${engBlock}`;
   replaceBibleLink(editor) {
     const cursor = editor.getCursor();
     const lineText = editor.getLine(cursor.line);
-    const textBeforeCursor = lineText.substring(0, cursor.ch);
-    const regex = /(?:[\(\[\{])?([가-힣a-zA-Z0-9]{1,6})\s*(\d+)(?:[:：](\d+)(?:-(\d+))?)?(?:[\)\]\}])?/g;
-    let match;
-    let lastMatch = null;
-    while ((match = regex.exec(textBeforeCursor)) !== null) {
-      lastMatch = match;
+    const sel = editor.getSelection ? editor.getSelection() : "";
+    const regex = /(?:[\(\[\{<])?((?:[1-3]\s*)?[가-힣a-zA-Z]{1,10}(?:[1-3]서)?)\s*(\d{1,3})(?:\s*[:：]\s*(\d{1,3}(?:\s*[-~–]\s*\d{1,3}|\s*,\s*\d{1,3})*))?(?:[\)\]\}>])?/g;
+
+    let targetMatch = null;
+    let targetStandardBook = null;
+    let inSelection = false;
+
+    // 1) 선택 영역이 있으면 선택 영역 내에서 매칭 우선
+    if (sel && sel.trim()) {
+      let selMatch;
+      const selRx = new RegExp(regex.source, regex.flags);
+      while ((selMatch = selRx.exec(sel)) !== null) {
+        const sb = getStandardBookCode(selMatch[1], this.customBookMap);
+        if (BIBLE_ORDER_MAP.has(sb)) {
+          targetMatch = selMatch;
+          targetStandardBook = sb;
+          inSelection = true;
+          break;
+        }
+      }
     }
-    if (!lastMatch) {
-      new import_obsidian.Notice("\uCEE4\uC11C \uC55E\uCABD\uC5D0\uC11C \uC131\uACBD \uC7A5\uC808 \uD328\uD134(\uC608: \uCC3D 1:1 \uB610\uB294 \uCC3D 1)\uC744 \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
+
+    // 2) 선택 영역이 없거나 선택 영역에서 못 찾은 경우 라인 전체 검색
+    if (!targetMatch) {
+      const allMatches = [];
+      let m;
+      const lineRx = new RegExp(regex.source, regex.flags);
+      while ((m = lineRx.exec(lineText)) !== null) {
+        const sb = getStandardBookCode(m[1], this.customBookMap);
+        if (BIBLE_ORDER_MAP.has(sb)) {
+          allMatches.push({ match: m, sb });
+        }
+      }
+
+      if (allMatches.length > 0) {
+        // 커서 위치가 매치 범위 내에 있는 것 우선
+        for (const item of allMatches) {
+          const start = item.match.index;
+          const end = start + item.match[0].length;
+          if (cursor.ch >= start && cursor.ch <= end) {
+            targetMatch = item.match;
+            targetStandardBook = item.sb;
+            break;
+          }
+        }
+        // 커서 앞쪽에 있는 가장 가까운 매치
+        if (!targetMatch) {
+          const before = allMatches.filter(item => item.match.index <= cursor.ch);
+          if (before.length > 0) {
+            targetMatch = before[before.length - 1].match;
+            targetStandardBook = before[before.length - 1].sb;
+          }
+        }
+        // 커서가 맨 앞이거나 앞에 없으면 첫 번째 매치
+        if (!targetMatch) {
+          targetMatch = allMatches[0].match;
+          targetStandardBook = allMatches[0].sb;
+        }
+      }
+    }
+
+    if (!targetMatch || !targetStandardBook) {
+      new import_obsidian.Notice("성경 장절 패턴(예: 창 1:1, (창1:1), 겔37:1)을 찾지 못했습니다.");
       return;
     }
-    const fullMatchText = lastMatch[0];
-    const rawBook = lastMatch[1];
-    const chapter = parseInt(lastMatch[2], 10);
-    const standardBook = getStandardBookCode(rawBook, this.customBookMap);
-    if (!BIBLE_ORDER_MAP.has(standardBook)) {
-      return;
-    }
+
+    const fullMatchText = targetMatch[0];
+    const rawBook = targetMatch[1];
+    const chapter = parseInt(targetMatch[2], 10);
+    const standardBook = targetStandardBook;
     const activeVersion = this.getActiveVersion();
     if (!activeVersion) {
-      new import_obsidian.Notice("\uD65C\uC131\uD654\uB41C \uC131\uACBD \uB370\uC774\uD130\uAC00 \uC5C6\uC2B5\uB2C8\uB2E4. \uC124\uC815\uC5D0\uC11C btx \uD30C\uC77C \uD3F4\uB354\uB97C \uD655\uC778\uD574 \uC8FC\uC138\uC694.");
+      new import_obsidian.Notice("활성화된 성경 데이터가 없습니다. 설정에서 btx 파일 폴더를 확인해 주세요.");
       return;
     }
     const bookMap = activeVersion.index.get(standardBook);
     if (!bookMap) {
-      new import_obsidian.Notice(`\uC131\uACBD\uCC45\uBA85 '${rawBook}'\uC5D0 \uD574\uB2F9\uD558\uB294 \uB370\uC774\uD130\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.`);
+      new import_obsidian.Notice(`성경책명 '${rawBook}'에 해당하는 데이터를 찾을 수 없습니다.`);
       return;
     }
     const chapterMap = bookMap.get(chapter);
     if (!chapterMap) {
-      new import_obsidian.Notice(`\uD574\uB2F9 \uC131\uACBD\uC5D0 ${chapter}\uC7A5\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.`);
+      new import_obsidian.Notice(`해당 성경에 ${chapter}장이 없습니다.`);
       return;
     }
-    const startVerse = lastMatch[3] ? parseInt(lastMatch[3], 10) : 1;
-    const hasVerse = lastMatch[3] !== void 0;
-    let endVerse = startVerse;
-    if (hasVerse) {
-      endVerse = lastMatch[4] ? parseInt(lastMatch[4], 10) : startVerse;
+    const verseSpec = targetMatch[3];
+    const targetNums = [];
+    if (verseSpec !== void 0 && String(verseSpec).trim() !== "") {
+      const seen = new Set();
+      for (const rawPart of String(verseSpec).split(",")) {
+        const part = rawPart.trim();
+        if (!part) continue;
+        const rm = part.match(/^(\d+)\s*[-~–]\s*(\d+)$/);
+        if (rm) {
+          const a = parseInt(rm[1], 10);
+          const b = parseInt(rm[2], 10);
+          const s = Math.min(a, b), e = Math.max(a, b);
+          for (let v = s; v <= e; v++) {
+            if (!seen.has(v)) { seen.add(v); targetNums.push(v); }
+          }
+        } else if (/^\d+$/.test(part)) {
+          const v = parseInt(part, 10);
+          if (!seen.has(v)) { seen.add(v); targetNums.push(v); }
+        }
+      }
     } else {
       let maxVerse = 1;
       for (const vKey of chapterMap.keys()) {
         if (vKey > maxVerse)
           maxVerse = vKey;
       }
-      endVerse = maxVerse;
+      for (let v = 1; v <= maxVerse; v++) targetNums.push(v);
     }
     const matchedVerses = [];
-    for (let v = startVerse; v <= endVerse; v++) {
+    for (const v of targetNums) {
       const verseObj = chapterMap.get(v);
       if (verseObj) {
         matchedVerses.push(verseObj);
       }
     }
     if (matchedVerses.length === 0) {
-      new import_obsidian.Notice(`${chapter}\uC7A5 ${startVerse}\uC808 ~ ${endVerse}\uC808 \uBC94\uC704\uC5D0 \uD574\uB2F9\uD558\uB294 \uAD6C\uC808\uC774 \uC5C6\uC2B5\uB2C8\uB2E4.`);
+      new import_obsidian.Notice(`${chapter}장 ${verseSpec || ""}절에 해당하는 구절이 없습니다.`);
       return;
     }
     const replacementText = this.assembleVerses(matchedVerses, true);
-    const startCh = lastMatch.index;
-    const endCh = lastMatch.index + fullMatchText.length;
-    editor.replaceRange(replacementText, { line: cursor.line, ch: startCh }, { line: cursor.line, ch: endCh });
+    if (inSelection) {
+      editor.replaceSelection(replacementText);
+    } else {
+      const startCh = targetMatch.index;
+      const endCh = targetMatch.index + fullMatchText.length;
+      editor.replaceRange(replacementText, { line: cursor.line, ch: startCh }, { line: cursor.line, ch: endCh });
+    }
   }
   formatVerse(verse) {
     return this.assembleVerses([verse], false);
@@ -12149,7 +13122,7 @@ var BibleVersionSelectModal = class extends import_obsidian.SuggestModal {
   }
 };
 var BibleMultiSearchModal = class extends import_obsidian.Modal {
-  constructor(app, plugin, initialQuery, onSelect) {
+  constructor(app, plugin, initialQuery, onSelect, editor, savedCursor, savedSelection, leaf, savedLineText, savedTopLineText) {
     super(app);
     this.inputs = [];
     this.verses = [];
@@ -12161,6 +13134,31 @@ var BibleMultiSearchModal = class extends import_obsidian.Modal {
     this.plugin = plugin;
     this.initialQuery = initialQuery;
     this.onSelect = onSelect;
+    this.editor = editor;
+    this.savedCursor = savedCursor;
+    this.savedSelection = savedSelection;
+    this.leaf = leaf;
+    this.savedLineText = savedLineText;
+    this.savedTopLineText = savedTopLineText;
+  }
+  closeModalSafely() {
+    const wasComposing = this.composing;
+    this.composing = false;
+    if (Array.isArray(this.inputs)) {
+      this.inputs.forEach((inp) => {
+        try {
+          inp.blur();
+        } catch (e) {}
+      });
+    }
+    // [중요] 한글 조합 중이었을 때 macOS IME가 비동기로 입력창 내부에서 글자를 확정/배출하도록 80ms 대기 후 닫기
+    if (wasComposing) {
+      setTimeout(() => {
+        this.close();
+      }, 80);
+    } else {
+      this.close();
+    }
   }
   onOpen() {
     const { contentEl } = this;
@@ -12227,12 +13225,16 @@ var BibleMultiSearchModal = class extends import_obsidian.Modal {
         this.selectedIndex = -1;
         this.search();
       });
-      // [수정] 여기 있던 Enter / ArrowUp / ArrowDown 처리를 제거함.
-      // 아래 this.scope.register(...) 가 같은 키를 이미 처리하고 있어서, 입력칸에
-      // 포커스가 있는 상태(= 실제 사용 상황)에서는 두 곳이 모두 실행되었다.
-      //   Enter  -> selectVerse 가 두 번 -> 구절이 두 번 삽입됨 (실제 증상)
-      //   화살표 -> navigateResults 가 두 번 -> 결과가 두 칸씩 건너뜀
-      // e.preventDefault() 는 브라우저 기본 동작만 막을 뿐 옵시디언 Scope 처리는 못 막는다.
+      // [수정] ESC 키 입력 시 모달을 정상 종료하고 에디터 커서 복원
+      // macOS에서 한글 입력(자모 조합) 중 ESC를 누를 때 조합 중이던 글자(예: '녕')가
+      // [수정] ESC 키 입력 시 모달을 안전하게 종료하고 에디터 커서 복원
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Escape" || e.keyCode === 27) {
+          e.preventDefault();
+          e.stopPropagation();
+          this.closeModalSafely();
+        }
+      });
       // 한글 입력(IME) 조합 중인지 추적 — 조합을 끝내려고 누른 Enter 가 선택으로 새는 것 방지
       input.addEventListener("compositionstart", () => {
         this.composing = true;
@@ -12255,6 +13257,10 @@ var BibleMultiSearchModal = class extends import_obsidian.Modal {
       e.preventDefault();
       this.navigateResults(-1);
     });
+    this.scope.register([], "Escape", (e) => {
+      e.preventDefault();
+      this.closeModalSafely();
+    });
     this.scope.register([], "Enter", (e) => {
       e.preventDefault();
       // 한글 조합을 확정하려고 누른 Enter 는 무시 (조합 중에 선택되어 버리는 것 방지)
@@ -12273,7 +13279,10 @@ var BibleMultiSearchModal = class extends import_obsidian.Modal {
       this.renderMessage("\uD65C\uC131\uD654\uB41C \uAC80\uC0C9 \uC131\uACBD \uB370\uC774\uD130\uAC00 \uC874\uC7AC\uD558\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4.");
       return;
     }
-    const queries = this.inputs.map((input) => input.value.trim().toLowerCase()).filter((q) => q);
+    const queries = this.inputs
+      .flatMap((input) => input.value.split(/,|\s+and\s+|\s*&\s*/i))
+      .map((q) => q.trim().toLowerCase())
+      .filter((q) => q);
     this.renderLimit = 100;
     if (queries.length === 0) {
       this.renderMessage("\uAC80\uC0C9\uC5B4\uB97C 1\uAC1C \uC774\uC0C1 \uC785\uB825\uD574 \uC8FC\uC138\uC694.");
@@ -12363,7 +13372,10 @@ var BibleMultiSearchModal = class extends import_obsidian.Modal {
       this.renderMessage("\uACB0\uACFC\uB97C \uCC3E\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.");
       return;
     }
-    const queries = this.inputs.map((input) => input.value.trim().toLowerCase()).filter((q) => q);
+    const queries = this.inputs
+      .flatMap((input) => input.value.split(/,|\s+and\s+|\s*&\s*/i))
+      .map((q) => q.trim().toLowerCase())
+      .filter((q) => q);
     const isEnglish = this.currentSearchVersion.name.startsWith("e");
     const total = this.verses.length;
     const shown = Math.min(this.renderLimit, total);
@@ -12444,6 +13456,70 @@ var BibleMultiSearchModal = class extends import_obsidian.Modal {
     this.onSelect(safeVerse);
     this.close();
   }
+  close() {
+    this.composing = false;
+    if (Array.isArray(this.inputs)) {
+      this.inputs.forEach((inp) => {
+        try {
+          inp.blur();
+        } catch (e) {}
+      });
+    }
+    super.close();
+  }
+  onClose() {
+    const { contentEl } = this;
+    contentEl.empty();
+    // [수정] 구절 선택 없이 ESC나 바깥 클릭으로 모달을 닫았을 때
+    // 1) macOS(WebKit)에서 에디터 커서가 맨 위(line 0, ch 0)로 튕기거나 화면이 맨 위로 스크롤되는 현상 방지
+    // 2) 한글 IME 조합 글자('녕' 등)가 에디터로 유출(leak)되어 강제 입력되는 현상 완벽 복구
+    if (!this.chosen && this.editor) {
+      const restore = () => {
+        try {
+          if (this.leaf && this.app && this.app.workspace) {
+            this.app.workspace.setActiveLeaf(this.leaf, { focus: true });
+          }
+          if (typeof this.editor.focus === "function") {
+            this.editor.focus();
+          }
+          // [핵심 이중방어] 만약 macOS 한글 조합 글자('녕' 등)가 에디터로 유출되어 줄 내용이 변했다면 원상 복구!
+          if (typeof this.editor.getLine === "function" && typeof this.editor.setLine === "function") {
+            if (this.savedCursor && this.savedLineText !== null && this.savedLineText !== void 0) {
+              const curLine = this.editor.getLine(this.savedCursor.line);
+              if (curLine !== this.savedLineText) {
+                this.editor.setLine(this.savedCursor.line, this.savedLineText);
+              }
+            }
+            if (this.savedTopLineText !== null && this.savedTopLineText !== void 0 && (!this.savedCursor || this.savedCursor.line !== 0)) {
+              const curTop = this.editor.getLine(0);
+              if (curTop !== this.savedTopLineText) {
+                this.editor.setLine(0, this.savedTopLineText);
+              }
+            }
+          }
+          if (this.savedSelection && this.savedSelection.length > 0) {
+            const sel = this.savedSelection[0];
+            if (sel && sel.anchor && sel.head && (sel.anchor.line !== sel.head.line || sel.anchor.ch !== sel.head.ch)) {
+              if (typeof this.editor.setSelection === "function") {
+                this.editor.setSelection(sel.anchor, sel.head);
+              }
+            } else if (this.savedCursor && typeof this.editor.setCursor === "function") {
+              this.editor.setCursor(this.savedCursor);
+            }
+          } else if (this.savedCursor && typeof this.editor.setCursor === "function") {
+            this.editor.setCursor(this.savedCursor);
+          }
+          if (this.savedCursor && typeof this.editor.scrollIntoView === "function") {
+            this.editor.scrollIntoView({ from: this.savedCursor, to: this.savedCursor }, true);
+          }
+        } catch (e) {
+        }
+      };
+      setTimeout(restore, 50);
+      setTimeout(restore, 150);
+      setTimeout(restore, 300);
+    }
+  }
 };
 var BethlehemBibleSettingTab = class extends import_obsidian.PluginSettingTab {
   constructor(app, plugin) {
@@ -12460,15 +13536,77 @@ var BethlehemBibleSettingTab = class extends import_obsidian.PluginSettingTab {
       det.style.cssText = "margin: 6px 0 14px 0; border: 1px solid var(--background-modifier-border); border-radius: 6px; padding: 2px 12px 12px 12px;";
       const sum = det.createEl("summary", { text: title });
       sum.style.cssText = "cursor: pointer; font-weight: 600; padding: 8px 0; user-select: none; font-size: 1.05em;";
-      return det.createDiv();
+      return det;
     };
+    const bibles = Array.from(this.plugin.bibles.values());
+
+    const secData = section("📦 성경 · 원어(스트롱) · 글꼴 데이터 자동 설치", bibles.length === 0);
+    const dataDescEl = secData.createDiv();
+    dataDescEl.style.cssText = 'font-size: 13px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.5;';
+    dataDescEl.setText('GitHub 릴리즈에서 성경 본문(_bibles), 스트롱코드 원어사전(_strong, _strong_json), 추천 글꼴(_설교마인드맵_글꼴)을 자동으로 다운로드하여 현재 보관함(Vault)에 설치합니다. (Windows, macOS, iPadOS 모두 지원)');
+
+    const statusEl = secData.createDiv();
+    statusEl.style.cssText = 'padding: 8px 12px; margin-bottom: 12px; border-radius: 6px; background: var(--background-secondary); font-size: 12px; line-height: 1.6;';
+    const refreshStatus = async () => {
+      try {
+        const ad = this.app.vault.adapter;
+        const hasBibles = await ad.exists('_bibles');
+        const hasStrong = await ad.exists('_strong');
+        const hasStrongJson = await ad.exists('_strong_json');
+        const hasFonts = await ad.exists('_설교마인드맵_글꼴');
+        statusEl.innerHTML = `<b>현재 보관함 설치 상태:</b><br>` +
+          `• 성경 DB (_bibles): ${hasBibles ? '<span style="color:var(--text-success)">설치됨 ✓</span>' : '<span style="color:var(--text-error)">미설치 ✗</span>'}<br>` +
+          `• 스트롱 원어 DB (_strong): ${hasStrong ? '<span style="color:var(--text-success)">설치됨 ✓</span>' : '<span style="color:var(--text-error)">미설치 ✗</span>'}<br>` +
+          `• 모바일용 스트롱 JSON (_strong_json): ${hasStrongJson ? '<span style="color:var(--text-success)">설치됨 ✓</span>' : '<span style="color:var(--text-error)">미설치 ✗</span>'}<br>` +
+          `• 추천 글꼴 (_설교마인드맵_글꼴): ${hasFonts ? '<span style="color:var(--text-success)">설치됨 ✓</span>' : '<span style="color:var(--text-error)">미설치 ✗</span>'}`;
+      } catch (e) {
+        statusEl.setText('설치 상태를 확인하지 못했습니다.');
+      }
+    };
+    refreshStatus();
+
+    new import_obsidian.Setting(secData)
+      .setName('데이터 원클릭 다운로드 & 설치')
+      .setDesc('ZIP 압축 파일(약 169MB)을 다운로드하고 보관함에 바로 압축을 풉니다.')
+      .addButton((btn) => {
+        btn
+          .setButtonText('지금 다운로드 & 설치')
+          .setCta()
+          .onClick(async () => {
+            btn.setDisabled(true);
+            btn.setButtonText('설치 진행 중...');
+            try {
+              const ok = await smmDownloadAndInstallData(this.plugin);
+              if (ok) {
+                await refreshStatus();
+                this.display();
+              }
+            } finally {
+              btn.setDisabled(false);
+              btn.setButtonText('지금 다운로드 & 설치');
+            }
+          });
+      });
+
+    new import_obsidian.Setting(secData)
+      .setName('다운로드 URL (고급)')
+      .setDesc('기본 GitHub 릴리즈 외에 별도의 ZIP URL에서 다운로드할 때만 입력합니다.')
+      .addText((text) =>
+        text
+          .setPlaceholder(DEFAULT_SETTINGS.bibleDataDownloadUrl)
+          .setValue(this.plugin.settings.bibleDataDownloadUrl || '')
+          .onChange(async (val) => {
+            this.plugin.settings.bibleDataDownloadUrl = val.trim();
+            await this.plugin.saveSettings();
+          })
+      );
+
     const secBase = section("\u{1F4C1} \uAE30\uBCF8 \uACBD\uB85C \uBC0F \uBC84\uC804 \uC124\uC815", true);
     new import_obsidian.Setting(secBase).setName("\uC131\uACBD \uB370\uC774\uD130 \uD3F4\uB354 (.btx)").setDesc("\uC131\uACBD btx \uD30C\uC77C\uB4E4\uC774 \uC704\uCE58\uD55C \uD3F4\uB354 \uACBD\uB85C\uB97C \uC785\uB825\uD558\uC138\uC694. (\uC608: _bibles)").addText((text) => text.setPlaceholder("_bibles").setValue(this.plugin.settings.bibleFolder).onChange(async (value) => {
       this.plugin.settings.bibleFolder = value;
       await this.plugin.saveSettings();
       await this.plugin.loadBibleData();
     }));
-    const bibles = Array.from(this.plugin.bibles.values());
     const dropdownOptions = {};
     const englishDropdownOptions = {};
     bibles.forEach((b) => {
@@ -12569,8 +13707,16 @@ var BethlehemBibleSettingTab = class extends import_obsidian.PluginSettingTab {
     const pathSetting = new import_obsidian.Setting(secStrong).setName("\uBCA0\uB4E4\uB808\uD5F4 \uC708\uB3C4\uC6B0\uC6A9 \uD3F4\uB354 \uACBD\uB85C").setDesc("\uBCA0\uB4E4\uB808\uD5F4 SQLite \uD30C\uC77C (.sdb, .dct)\uC774 \uC704\uCE58\uD55C \uD3F4\uB354 \uACBD\uB85C\uC785\uB2C8\uB2E4.");
     let pathTextComponent;
     pathSetting.addText((text) => {
-      text.setPlaceholder("C:\\Users\\...\\BethlehemWin").setValue(this.plugin.settings.bethlehemWinFolder).onChange(async (value) => {
-        this.plugin.settings.bethlehemWinFolder = value;
+      text.setPlaceholder("_strong").setValue(this.plugin.settings.bethlehemWinFolder || "_strong").onChange(async (value) => {
+        let val = value.trim();
+        const vaultPath = (this.plugin.getVaultBasePath() || "").replace(/\\/g, "/");
+        const cleanVal = val.replace(/\\/g, "/");
+        if (vaultPath && cleanVal.startsWith(vaultPath)) {
+          let rel = cleanVal.slice(vaultPath.length);
+          while (rel.startsWith("/")) rel = rel.slice(1);
+          val = rel || "_strong";
+        }
+        this.plugin.settings.bethlehemWinFolder = val || "_strong";
         await this.plugin.saveSettings();
       });
       pathTextComponent = text;
@@ -12586,7 +13732,14 @@ var BethlehemBibleSettingTab = class extends import_obsidian.PluginSettingTab {
           if (files && files.length > 0) {
             const firstFilePath = files[0].path;
             if (firstFilePath) {
-              const folderPath = getDirname(firstFilePath);
+              let folderPath = getDirname(firstFilePath);
+              const vaultPath = (this.plugin.getVaultBasePath() || "").replace(/\\/g, "/");
+              const cleanFolder = folderPath.replace(/\\/g, "/");
+              if (vaultPath && cleanFolder.startsWith(vaultPath)) {
+                let rel = cleanFolder.slice(vaultPath.length);
+                while (rel.startsWith("/")) rel = rel.slice(1);
+                folderPath = rel || "_strong";
+              }
               this.plugin.settings.bethlehemWinFolder = folderPath;
               await this.plugin.saveSettings();
               pathTextComponent.setValue(folderPath);
@@ -12597,24 +13750,25 @@ var BethlehemBibleSettingTab = class extends import_obsidian.PluginSettingTab {
         fileInput.click();
       });
     });
-    new import_obsidian.Setting(secStrong).setName("\uAE30\uBCF8 \uD55C\uAE00 \uC2A4\uD2B8\uB871 \uC131\uACBD (.sdb)").setDesc("\uC6D0\uC5B4 \uBCF4\uAE30\uC5D0\uC11C \uC0AC\uC6A9\uD560 \uAE30\uBCF8 \uD55C\uAE00 \uC2A4\uD2B8\uB871 \uC131\uACBD \uD30C\uC77C\uBA85\uC785\uB2C8\uB2E4.").addText((text) => text.setValue(this.plugin.settings.selectedStrongBibleKor).onChange(async (value) => {
-      this.plugin.settings.selectedStrongBibleKor = value;
+    new import_obsidian.Setting(secStrong).setName("\uAE30\uBCF8 \uD55C\uAE00 \uC2A4\uD2B8\uB871 \uC131\uACBD (.sdb)").setDesc("\uC6D0\uC5B4 \uBCF4\uAE30\uC5D0\uC11C \uC0AC\uC6A9\uD560 \uAE30\uBCF8 \uD55C\uAE00 \uC2A4\uD2B8\uB871 \uC131\uACBD \uD30C\uC77C\uBA85\uC785\uB2C8\uB2E4.").addText((text) => text.setPlaceholder("개역한글S.sdb").setValue(this.plugin.settings.selectedStrongBibleKor || "개역한글S.sdb").onChange(async (value) => {
+      this.plugin.settings.selectedStrongBibleKor = value.trim() || "개역한글S.sdb";
       await this.plugin.saveSettings();
     }));
-    new import_obsidian.Setting(secStrong).setName("\uAE30\uBCF8 \uC601\uC5B4 \uC2A4\uD2B8\uB871 \uC131\uACBD (.sdb)").setDesc("\uC6D0\uC5B4 \uBCF4\uAE30\uC5D0\uC11C \uC0AC\uC6A9\uD560 \uAE30\uBCF8 \uC601\uC5B4 \uC2A4\uD2B8\uB871 \uC131\uACBD \uD30C\uC77C\uBA85\uC785\uB2C8\uB2E4.").addText((text) => text.setValue(this.plugin.settings.selectedStrongBibleEng).onChange(async (value) => {
-      this.plugin.settings.selectedStrongBibleEng = value;
+    new import_obsidian.Setting(secStrong).setName("\uAE30\uBCF8 \uC601\uC5B4 \uC2A4\uD2B8\uB871 \uC131\uACBD (.sdb)").setDesc("\uC6D0\uC5B4 \uBCF4\uAE30\uC5D0\uC11C \uC0AC\uC6A9\uD560 \uAE30\uBCF8 \uC601\uC5B4 \uC2A4\uD2B8\uB871 \uC131\uACBD \uD30C\uC77C\uBA85\uC785\uB2C8\uB2E4.").addText((text) => text.setPlaceholder("KJV_S.sdb").setValue(this.plugin.settings.selectedStrongBibleEng || "KJV_S.sdb").onChange(async (value) => {
+      this.plugin.settings.selectedStrongBibleEng = value.trim() || "KJV_S.sdb";
       await this.plugin.saveSettings();
     }));
-    new import_obsidian.Setting(secStrong).setName("\uAE30\uBCF8 \uD55C\uAE00 \uC6D0\uC5B4 \uC0AC\uC804 (.dct)").setDesc("\uC6D0\uC5B4 \uBCF4\uAE30\uC5D0\uC11C \uC0AC\uC6A9\uD560 \uAE30\uBCF8 \uD55C\uAE00 \uC0AC\uC804 \uD30C\uC77C\uBA85\uC785\uB2C8\uB2E4.").addText((text) => text.setValue(this.plugin.settings.selectedStrongLexiconKor).onChange(async (value) => {
-      this.plugin.settings.selectedStrongLexiconKor = value;
+    new import_obsidian.Setting(secStrong).setName("\uAE30\uBCF8 \uD55C\uAE00 \uC6D0\uC5B4 \uC0AC\uC804 (.dct)").setDesc("\uC6D0\uC5B4 \uBCF4\uAE30\uC5D0\uC11C \uC0AC\uC6A9\uD560 \uAE30\uBCF8 \uD55C\uAE00 \uC0AC\uC804 \uD30C\uC77C\uBA85\uC785\uB2C8\uB2E4.").addText((text) => text.setPlaceholder("HebGrkKo.dct").setValue(this.plugin.settings.selectedStrongLexiconKor || "HebGrkKo.dct").onChange(async (value) => {
+      this.plugin.settings.selectedStrongLexiconKor = value.trim() || "HebGrkKo.dct";
       await this.plugin.saveSettings();
     }));
-    new import_obsidian.Setting(secStrong).setName("\uAE30\uBCF8 \uC601\uBB38 \uC6D0\uC5B4 \uC0AC\uC804 (.dct)").setDesc("\uC6D0\uC5B4 \uBCF4\uAE30\uC5D0\uC11C \uC0AC\uC6A9\uD560 \uAE30\uBCF8 \uC601\uBB38 \uC0AC\uC804 \uD30C\uC77C\uBA85\uC785\uB2C8\uB2E4.").addText((text) => text.setValue(this.plugin.settings.selectedStrongLexiconEng).onChange(async (value) => {
-      this.plugin.settings.selectedStrongLexiconEng = value;
+    new import_obsidian.Setting(secStrong).setName("\uAE30\uBCF8 \uC601\uBB38 \uC6D0\uC5B4 \uC0AC\uC804 (.dct)").setDesc("\uC6D0\uC5B4 \uBCF4\uAE30\uC5D0\uC11C \uC0AC\uC6A9\uD560 \uAE30\uBCF8 \uC601\uBB38 \uC0AC\uC804 \uD30C\uC77C\uBA85\uC785\uB2C8\uB2E4.").addText((text) => text.setPlaceholder("HebGrkEn.dct").setValue(this.plugin.settings.selectedStrongLexiconEng || "HebGrkEn.dct").onChange(async (value) => {
+      this.plugin.settings.selectedStrongLexiconEng = value.trim() || "HebGrkEn.dct";
       await this.plugin.saveSettings();
     }));
     new import_obsidian.Setting(secStrong).setName("\uC2A4\uD2B8\uB871\uCF54\uB4DC \uC790\uB3D9 \uC5F0\uB3D9").setDesc("\uC5D0\uB514\uD130 \uCEE4\uC11C\uAC00 \uC131\uACBD \uAD6C\uC808 \uC704\uCE58\uB85C \uC774\uB3D9\uD560 \uB54C \uC6D0\uC5B4 \uBCF4\uAE30 \uCC3D\uC744 \uC790\uB3D9\uC73C\uB85C \uAC31\uC2E0\uD569\uB2C8\uB2E4.").addToggle((toggle) => toggle.setValue(this.plugin.settings.strongAutoSync).onChange(async (value) => {
       this.plugin.settings.strongAutoSync = value;
+      this.plugin.settings.compareAutoSync = value;
       await this.plugin.saveSettings();
     }));
     new import_obsidian.Setting(secStrong).setName("\uC131\uACBD \uC9C0\uB3C4 \uC790\uB3D9 \uC5F0\uB3D9").setDesc("\uC5D0\uB514\uD130 \uCEE4\uC11C\uAC00 \uC131\uACBD \uC9C0\uBA85(\uC608: \uC608\uB8E8\uC0B4\uB818, \uAC08\uB9B4\uB9AC \uB4F1) \uB2E8\uC5B4 \uADFC\uCC98\uB85C \uC774\uB3D9\uD560 \uB54C \uC9C0\uB3C4 \uCC3D\uC744 \uC790\uB3D9\uC73C\uB85C \uAC31\uC2E0\uD569\uB2C8\uB2E4.").addToggle((toggle) => toggle.setValue(this.plugin.settings.mapAutoSync).onChange(async (value) => {
@@ -12637,6 +13791,30 @@ var BethlehemBibleSettingTab = class extends import_obsidian.PluginSettingTab {
     };
     addRefColor("\uC2A4\uD2B8\uB871 \uC131\uACBD \uC7A5\uC808 \uC0C9 (\uB77C\uC774\uD2B8 \uD14C\uB9C8)", "\uC2A4\uD2B8\uB871 \uBCF4\uAE30\uC758 (\uAC08\uB77C\uB514\uC544\uC11C 2:12) \uAC19\uC740 \uC7A5\uC808\uACFC \uAD00\uC8FC \uD328\uB110\uC758 \uC7A5\uC808 \uB9C1\uD06C \uC0C9\uC785\uB2C8\uB2E4. \uC635\uC2DC\uB514\uC5B8 \uAC15\uC870 \uC0C9\uC0C1\uACFC \uBB34\uAD00\uD569\uB2C8\uB2E4.", "strongRefColorLight");
     addRefColor("\uC2A4\uD2B8\uB871 \uC131\uACBD \uC7A5\uC808 \uC0C9 (\uB2E4\uD06C \uD14C\uB9C8)", "\uB2E4\uD06C \uD14C\uB9C8\uC5D0\uC11C \uC0AC\uC6A9\uD560 \uC0C9\uC785\uB2C8\uB2E4.", "strongRefColorDark");
+
+    const secCompare = section("성경 역본 비교 (Compare View)", false);
+    new import_obsidian.Setting(secCompare)
+      .setName("성경 구절 절 번호 표시")
+      .setDesc("역본 비교 결과 및 복사 시 여러 절에 절 번호를 표시하는 형태입니다. (없음, 숫자만, (숫자))")
+      .addDropdown((dropdown) =>
+        dropdown
+          .addOption("paren", "(숫자) - 예: (1) 본문 (2) 본문 (기본값)")
+          .addOption("num", "숫자만 - 예: 1 본문 2 본문")
+          .addOption("none", "없음 - 절 번호 없이 본문만 연결")
+          .setValue(this.plugin.settings.compareVerseNumFormat || "paren")
+          .onChange(async (value) => {
+            this.plugin.settings.compareVerseNumFormat = value;
+            await this.plugin.saveSettings();
+            try {
+              const leaves = this.app.workspace.getLeavesOfType(VIEW_TYPE_BIBLE_COMPARE);
+              for (const leaf of leaves) {
+                if (leaf.view && typeof leaf.view.renderResults === "function") {
+                  leaf.view.renderResults();
+                }
+              }
+            } catch (e) {}
+          })
+      );
   }
 };
 var VIEW_TYPE_STRONG_BIBLE = "strong-bible-view";
@@ -12655,41 +13833,136 @@ var StrongBibleView = class extends import_obsidian.ItemView {
     return "\uC2A4\uD2B8\uB871 \uC6D0\uC5B4 \uC131\uACBD";
   }
   getIcon() {
-    return "book-open";
+    return "strong-s";
   }
   async onOpen() {
-    const container = this.containerEl.children[1];
+    const container = this.contentEl || (this.containerEl ? (this.containerEl.children[1] || this.containerEl) : null);
+    if (!container) return;
     container.empty();
     container.addClass("strong-bible-view-container");
     container.style.cssText = "display: flex; flex-direction: column; height: 100%; overflow: hidden; padding: 0; font-size: var(--nav-item-size, 13px);";
+    container.addEventListener("click", () => {
+      if (this.plugin) this.plugin._lastFocusedBibleViewType = VIEW_TYPE_STRONG_BIBLE;
+    });
+    container.addEventListener("focusin", () => {
+      if (this.plugin) this.plugin._lastFocusedBibleViewType = VIEW_TYPE_STRONG_BIBLE;
+    });
     const headerEl = container.createDiv({ cls: "strong-bible-header" });
     headerEl.style.cssText = "padding: 10px; border-bottom: 1px solid var(--border-color); display: flex; flex-direction: column; gap: 8px; background-color: var(--background-secondary); flex-shrink: 0;";
-    const row1El = headerEl.createDiv();
-    row1El.style.cssText = "display: flex; gap: 6px; align-items: center;";
+    const row1El = headerEl.createDiv({ cls: "strong-bible-row1" });
+    row1El.style.cssText = "display: flex; gap: 6px; align-items: center; width: 100%;";
     this.searchEl = row1El.createEl("input", {
       type: "text",
       placeholder: "\uC7A5\uC808 \uC785\uB825 (\uC608: \uB9C8 18:15)",
       cls: "strong-bible-search-input"
     });
-    this.searchEl.style.cssText = "flex: 1; padding: 6px; border-radius: 4px; border: 1px solid var(--border-color); background-color: var(--background-primary); color: var(--text-normal);";
-    this.displayModeSelectEl = row1El.createEl("select");
-    this.displayModeSelectEl.style.cssText = "padding: 6px; border-radius: 4px; border: 1px solid var(--border-color); background-color: var(--background-primary); color: var(--text-normal);";
+    this.searchEl.setAttribute("enterkeyhint", "search");
+    this.searchEl.style.cssText = "flex: 1; width: 100%; min-width: 0; padding: 6px 10px; height: 32px; border-radius: 4px; font-size: 13px;";
+    this.searchEl.addEventListener("focus", () => {
+      if (this.plugin) this.plugin._lastFocusedBibleViewType = VIEW_TYPE_STRONG_BIBLE;
+    });
+
+    const searchBtn = row1El.createEl("button", {
+      text: "검색",
+      cls: "bible-compare-btn primary strong-bible-search-btn",
+      title: "성경 장절 검색"
+    });
+    searchBtn.style.cssText = "height: 32px; padding: 0 14px; font-size: 13px; font-weight: 600; flex-shrink: 0; border-radius: 4px; cursor: pointer; background-color: var(--interactive-accent); color: var(--text-on-accent); border: none;";
+    searchBtn.addEventListener("click", () => {
+      if (this.searchEl && this.searchEl.value) {
+        if (this.plugin) this.plugin.markManualSearch();
+        this.performSearch(this.searchEl.value.trim());
+      }
+    });
+
+    const row2ControlsEl = headerEl.createDiv({ cls: "strong-bible-controls-row" });
+    row2ControlsEl.style.cssText = "display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: space-between;";
+
+    const leftBtns = row2ControlsEl.createDiv();
+    leftBtns.style.cssText = "display: flex; gap: 6px; align-items: center; flex-wrap: wrap;";
+
+    this.displayModeSelectEl = leftBtns.createEl("select");
+    this.displayModeSelectEl.style.cssText = "padding: 4px 8px; height: 28px; border-radius: 4px; border: 1px solid var(--border-color); background-color: var(--background-primary); color: var(--text-normal); font-size: 0.85em;";
     this.displayModeSelectEl.createEl("option", { value: "both", text: "\uB300\uC870 \uBCF4\uAE30" });
     this.displayModeSelectEl.createEl("option", { value: "korean", text: "\uD55C\uAE00 \uC131\uACBD" });
     this.displayModeSelectEl.createEl("option", { value: "english", text: "\uC601\uC5B4 \uC131\uACBD" });
     this.displayModeSelectEl.value = this.plugin.settings.strongDisplayMode;
-    const syncLabel = row1El.createEl("label");
-    syncLabel.style.cssText = "display: flex; align-items: center; gap: 4px; font-size: 0.85em; cursor: pointer; white-space: nowrap; margin-left: 4px; user-select: none;";
+
+    const compareSwitchBtn = leftBtns.createEl("button", {
+      text: "📑 역본비교",
+      title: "성경 역본 비교 화면으로 전환 (단축키로도 전환 가능)"
+    });
+    compareSwitchBtn.style.cssText = "padding: 4px 8px; height: 28px; font-size: 0.85em; cursor: pointer; white-space: nowrap; border-radius: 4px; border: 1px solid var(--border-color); background-color: var(--background-modifier-border); color: var(--text-normal);";
+    compareSwitchBtn.addEventListener("click", () => {
+      if (this.plugin) this.plugin._lastFocusedBibleViewType = VIEW_TYPE_BIBLE_COMPARE;
+      const q = this.currentSearch || (this.searchEl ? this.searchEl.value.trim() : "");
+      this.plugin.activateCompareView(q);
+    });
+
+    const syncLabel = leftBtns.createEl("label");
+    syncLabel.style.cssText = "display: flex; align-items: center; gap: 4px; font-size: 0.85em; cursor: pointer; white-space: nowrap; user-select: none;";
     const syncCheckbox = syncLabel.createEl("input", { type: "checkbox" });
-    syncCheckbox.checked = this.plugin.settings.strongAutoSync;
+    syncCheckbox.checked = !!(this.plugin.settings.strongAutoSync || this.plugin.settings.compareAutoSync);
     syncLabel.createSpan({ text: "\uC5D0\uB514\uD130 \uC5F0\uB3D9" });
     syncCheckbox.addEventListener("change", async () => {
       this.plugin.settings.strongAutoSync = syncCheckbox.checked;
+      this.plugin.settings.compareAutoSync = syncCheckbox.checked;
       await this.plugin.saveSettings();
       if (syncCheckbox.checked) {
         this.plugin.handleCursorActivity();
       }
     });
+
+    const rightBtns = row2ControlsEl.createDiv();
+    rightBtns.style.cssText = "display: flex; gap: 4px; align-items: center; margin-left: auto;";
+
+    const strongFontCtrl = rightBtns.createDiv({ cls: "bible-compare-font-ctrl" });
+    strongFontCtrl.style.cssText = "display: inline-flex; align-items: center; gap: 3px; font-size: 0.82em; user-select: none;";
+    strongFontCtrl.createSpan({ text: "글자:" });
+    const sFontMinus = strongFontCtrl.createEl("button", { text: "A-", cls: "bible-compare-font-btn" });
+    const sCurSize = this.plugin.settings.strongFontSize || 15;
+    const sFontDisplay = strongFontCtrl.createSpan({ text: sCurSize + "px" });
+    const sFontPlus = strongFontCtrl.createEl("button", { text: "A+", cls: "bible-compare-font-btn" });
+
+    const applyStrongFontSize = (size) => {
+      let dynStyle = document.getElementById("strong-bible-dynamic-font-style");
+      if (!dynStyle) {
+        dynStyle = document.createElement("style");
+        dynStyle.id = "strong-bible-dynamic-font-style";
+        document.head.appendChild(dynStyle);
+      }
+      dynStyle.textContent = `
+        .strong-bible-verses-pane,
+        .strong-bible-verses-pane *,
+        .strong-bible-verses-pane .strong-verse-line,
+        .strong-bible-verses-pane .strong-verse-kor,
+        .strong-bible-verses-pane .strong-verse-eng,
+        .strong-bible-verses-pane .strong-verse-ref,
+        .strong-bible-verses-pane .strong-code-link {
+          font-size: ${size}px !important;
+        }
+        .strong-bible-lexicon-pane,
+        .strong-bible-lexicon-pane *,
+        .strong-bible-lexicon-pane .lexicon-section,
+        .strong-bible-lexicon-pane .lexicon-content,
+        .strong-bible-lexicon-pane .kwanju-pane-line {
+          font-size: ${size}px !important;
+        }
+      `;
+    };
+    applyStrongFontSize(sCurSize);
+
+    const updateStrongFont = async (delta) => {
+      let cur = this.plugin.settings.strongFontSize || 15;
+      cur = Math.max(11, Math.min(26, cur + delta));
+      this.plugin.settings.strongFontSize = cur;
+      sFontDisplay.setText(cur + "px");
+      applyStrongFontSize(cur);
+      await this.plugin.saveSettings();
+    };
+
+    sFontMinus.addEventListener("click", () => updateStrongFont(-1));
+    sFontPlus.addEventListener("click", () => updateStrongFont(1));
     const row2El = headerEl.createDiv();
     row2El.style.cssText = "display: none;";
     const createSelect = (parent, label, defaultValue) => {
@@ -12712,58 +13985,146 @@ var StrongBibleView = class extends import_obsidian.ItemView {
     const mainSplitEl = container.createDiv({ cls: "strong-bible-main-split" });
     mainSplitEl.style.cssText = "display: flex; flex-direction: column; flex: 1; overflow: hidden;";
     this.versesContainerEl = mainSplitEl.createDiv({ cls: "strong-bible-verses-pane" });
-    this.versesContainerEl.style.cssText = "flex: 3; min-height: 80px; overflow-y: auto; padding: 10px; font-size: var(--font-text-size);";
+    const savedHeight = this.plugin.settings.strongVersesPaneHeight;
+    const initialHeightStyle = (savedHeight && savedHeight > 50)
+      ? `flex: none; height: ${savedHeight}px;`
+      : "flex: 3;";
+    this.versesContainerEl.style.cssText = `${initialHeightStyle} min-height: 80px; overflow-y: auto; padding: 10px; font-size: ` + (this.plugin.settings.strongFontSize || 15) + "px;";
     const resizerEl = mainSplitEl.createDiv({ cls: "strong-bible-resizer" });
-    resizerEl.style.cssText = "height: 8px; cursor: row-resize; background-color: var(--border-color); flex-shrink: 0; user-select: none; position: relative; z-index: 10;";
+    resizerEl.style.cssText = "height: 12px; cursor: row-resize; background-color: var(--border-color); flex-shrink: 0; user-select: none; -webkit-user-select: none; position: relative; z-index: 10; touch-action: none; display: flex; align-items: center; justify-content: center;";
+    
+    const hitArea = resizerEl.createDiv();
+    hitArea.style.cssText = "position: absolute; top: -10px; bottom: -10px; left: 0; right: 0; z-index: 1; touch-action: none;";
+
+    const gripBar = resizerEl.createDiv();
+    gripBar.style.cssText = "width: 38px; height: 4px; border-radius: 2px; background-color: var(--text-muted); opacity: 0.6; pointer-events: none; transition: background-color 0.15s, opacity 0.15s;";
+
     let isResizing = false;
     let startY = 0;
     let startTopHeight = 0;
-    resizerEl.addEventListener("mouseenter", () => {
-      resizerEl.style.backgroundColor = "var(--interactive-accent)";
-    });
-    resizerEl.addEventListener("mouseleave", () => {
-      if (!isResizing)
-        resizerEl.style.backgroundColor = "var(--border-color)";
-    });
-    resizerEl.addEventListener("mousedown", (e) => {
+
+    const startResize = (clientY) => {
       isResizing = true;
-      startY = e.clientY;
+      startY = clientY;
       startTopHeight = this.versesContainerEl.getBoundingClientRect().height;
       resizerEl.style.backgroundColor = "var(--interactive-accent)";
+      gripBar.style.backgroundColor = "#ffffff";
+      gripBar.style.opacity = "1";
       document.body.style.cursor = "row-resize";
-      e.preventDefault();
-    });
-    const onMouseMove = (e) => {
-      if (!isResizing)
-        return;
-      const dy = e.clientY - startY;
+    };
+
+    const moveResize = (clientY) => {
+      if (!isResizing) return;
+      const dy = clientY - startY;
       const newHeight = Math.max(60, startTopHeight + dy);
       this.versesContainerEl.style.flex = "none";
       this.versesContainerEl.style.height = `${newHeight}px`;
     };
-    const onMouseUp = () => {
-      if (isResizing) {
-        isResizing = false;
-        resizerEl.style.backgroundColor = "var(--border-color)";
-        document.body.style.cursor = "";
+
+    const stopResize = () => {
+      if (!isResizing) return;
+      isResizing = false;
+      resizerEl.style.backgroundColor = "var(--border-color)";
+      gripBar.style.backgroundColor = "var(--text-muted)";
+      gripBar.style.opacity = "0.6";
+      document.body.style.cursor = "";
+      const finalH = Math.round(this.versesContainerEl.getBoundingClientRect().height);
+      if (finalH > 50 && this.plugin) {
+        this.plugin.settings.strongVersesPaneHeight = finalH;
+        this.plugin.saveSettings();
       }
     };
+
+    resizerEl.addEventListener("mouseenter", () => {
+      if (!isResizing) {
+        resizerEl.style.backgroundColor = "var(--interactive-accent)";
+        gripBar.style.opacity = "1";
+      }
+    });
+    resizerEl.addEventListener("mouseleave", () => {
+      if (!isResizing) {
+        resizerEl.style.backgroundColor = "var(--border-color)";
+        gripBar.style.opacity = "0.6";
+      }
+    });
+
+    resizerEl.addEventListener("pointerdown", (e) => {
+      startResize(e.clientY);
+      try { resizerEl.setPointerCapture(e.pointerId); } catch(err) {}
+      e.preventDefault();
+    });
+    resizerEl.addEventListener("pointermove", (e) => {
+      if (isResizing) {
+        moveResize(e.clientY);
+        e.preventDefault();
+      }
+    });
+    resizerEl.addEventListener("pointerup", (e) => {
+      try { resizerEl.releasePointerCapture(e.pointerId); } catch(err) {}
+      stopResize();
+    });
+    resizerEl.addEventListener("pointercancel", (e) => {
+      try { resizerEl.releasePointerCapture(e.pointerId); } catch(err) {}
+      stopResize();
+    });
+
+    resizerEl.addEventListener("touchstart", (e) => {
+      if (e.touches && e.touches.length > 0) {
+        startResize(e.touches[0].clientY);
+        if (e.cancelable) e.preventDefault();
+      }
+    }, { passive: false });
+
+    const onTouchMove = (e) => {
+      if (!isResizing) return;
+      if (e.touches && e.touches.length > 0) {
+        moveResize(e.touches[0].clientY);
+        if (e.cancelable) e.preventDefault();
+      }
+    };
+    const onTouchEnd = () => stopResize();
+    window.addEventListener("touchmove", onTouchMove, { passive: false });
+    window.addEventListener("touchend", onTouchEnd);
+    window.addEventListener("touchcancel", onTouchEnd);
+
+    resizerEl.addEventListener("mousedown", (e) => {
+      if (!isResizing) {
+        startResize(e.clientY);
+        e.preventDefault();
+      }
+    });
+    const onMouseMove = (e) => {
+      if (!isResizing) return;
+      moveResize(e.clientY);
+    };
+    const onMouseUp = () => stopResize();
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
     this.lexiconContainerEl = mainSplitEl.createDiv({ cls: "strong-bible-lexicon-pane" });
-    this.lexiconContainerEl.style.cssText = "flex: 2; min-height: 80px; overflow-y: auto; padding: 10px; background-color: var(--background-primary); font-size: var(--font-text-size);";
+    this.lexiconContainerEl.style.cssText = "flex: 2; min-height: 80px; overflow-y: auto; padding: 10px; background-color: var(--background-primary); font-size: " + (this.plugin.settings.strongFontSize || 15) + "px;";
     this.clearLexiconView();
     this.searchEl.addEventListener("keydown", (e) => {
       if (e.key === "Enter") {
+        if (this.plugin) this.plugin.markManualSearch();
         this.performSearch(this.searchEl.value.trim());
       }
     });
     const updateSetting = async () => {
-      this.plugin.settings.selectedStrongBibleKor = this.bibleSelectKorEl.value;
-      this.plugin.settings.selectedStrongBibleEng = this.bibleSelectEngEl.value;
-      this.plugin.settings.selectedStrongLexiconKor = this.lexiconSelectKorEl.value;
-      this.plugin.settings.selectedStrongLexiconEng = this.lexiconSelectEngEl.value;
-      this.plugin.settings.strongDisplayMode = this.displayModeSelectEl.value;
+      if (this.bibleSelectKorEl && this.bibleSelectKorEl.value) {
+        this.plugin.settings.selectedStrongBibleKor = this.bibleSelectKorEl.value;
+      }
+      if (this.bibleSelectEngEl && this.bibleSelectEngEl.value) {
+        this.plugin.settings.selectedStrongBibleEng = this.bibleSelectEngEl.value;
+      }
+      if (this.lexiconSelectKorEl && this.lexiconSelectKorEl.value) {
+        this.plugin.settings.selectedStrongLexiconKor = this.lexiconSelectKorEl.value;
+      }
+      if (this.lexiconSelectEngEl && this.lexiconSelectEngEl.value) {
+        this.plugin.settings.selectedStrongLexiconEng = this.lexiconSelectEngEl.value;
+      }
+      if (this.displayModeSelectEl && this.displayModeSelectEl.value) {
+        this.plugin.settings.strongDisplayMode = this.displayModeSelectEl.value;
+      }
       await this.plugin.saveSettings();
       if (this.currentSearch) {
         this.performSearch(this.currentSearch);
@@ -12776,16 +14137,25 @@ var StrongBibleView = class extends import_obsidian.ItemView {
     this.displayModeSelectEl.addEventListener("change", updateSetting);
   }
   async scanAndPopulateDbs() {
-    const winFolder = this.plugin.settings.bethlehemWinFolder;
+    let winFolder = this.plugin.settings.bethlehemWinFolder || "_strong";
     try {
-      const data = await this.plugin.scanFolderFiles(winFolder);
+      let data = await this.plugin.scanFolderFiles(winFolder);
+      if ((!data.sdbs || data.sdbs.length === 0) && winFolder !== "_strong") {
+        data = await this.plugin.scanFolderFiles("_strong");
+      }
       const populate = (select, list, fallback) => {
         select.empty();
-        list.forEach((f) => {
+        const effectiveList = [...(list || [])];
+        if (fallback && !effectiveList.includes(fallback)) {
+          effectiveList.unshift(fallback);
+        }
+        effectiveList.forEach((f) => {
           select.createEl("option", { value: f, text: f });
         });
-        if (list.includes(fallback)) {
+        if (effectiveList.includes(fallback)) {
           select.value = fallback;
+        } else if (effectiveList.length > 0) {
+          select.value = effectiveList[0];
         }
       };
       populate(this.bibleSelectKorEl, data.sdbs, this.plugin.settings.selectedStrongBibleKor);
@@ -12794,8 +14164,6 @@ var StrongBibleView = class extends import_obsidian.ItemView {
       populate(this.lexiconSelectEngEl, data.dcts, this.plugin.settings.selectedStrongLexiconEng);
     } catch (e) {
       console.error("Failed to scan Bethlehem Win folder:", e);
-      new import_obsidian.Notice(`\uBCA0\uB4E4\uB808\uD5F4 \uD3F4\uB354 \uC2A4\uCE94 \uC911 \uC624\uB958\uAC00 \uBC1C\uC0DD\uD588\uC2B5\uB2C8\uB2E4. \uD3F4\uB354\uC640 \uACBD\uB85C \uC124\uC815\uC744 \uD655\uC778\uD558\uC138\uC694.
-\uC624\uB958: ${e.message}`);
     }
   }
   clearLexiconView() {
@@ -12805,10 +14173,11 @@ var StrongBibleView = class extends import_obsidian.ItemView {
     emptyMsg.setText("\uC131\uACBD \uBCF8\uBB38\uC758 \uC2A4\uD2B8\uB871\uCF54\uB4DC\uB97C \uD074\uB9AD\uD558\uBA74 \uC5EC\uAE30\uC5D0 \uC0C1\uC138 \uC0AC\uC804 \uB73B\uC774 \uD45C\uC2DC\uB429\uB2C8\uB2E4.");
   }
   async performSearch(queryText) {
+    if (this.plugin) this.plugin._lastFocusedBibleViewType = VIEW_TYPE_STRONG_BIBLE;
     if (!queryText)
       return;
     this.currentSearch = queryText;
-    const regex = /([가-힣a-zA-Z0-9]{1,6})\s*(\d+)(?:[:：](\d+))?/;
+    const regex = /((?:[1-3]\s*)?[가-힣a-zA-Z]{1,10}(?:[1-3]서)?)\s*(\d{1,3})(?:\s*[:：]\s*(\d{1,3}))?/;
     const match = queryText.match(regex);
     if (!match) {
       new import_obsidian.Notice("\uC7A5\uC808 \uADDC\uACA9\uC774 \uC62C\uBC14\uB974\uC9C0 \uC54A\uC2B5\uB2C8\uB2E4. (\uC608: \uB9C8 18:15 \uB610\uB294 \uCC3D 1)");
@@ -12983,7 +14352,7 @@ var StrongBibleView = class extends import_obsidian.ItemView {
           refSpan.style.cssText = "color: var(--bf-strong-ref-color, #58a6ff); font-weight: bold; font-size: var(--nav-item-size, 13px);";
           if (kwanjuMap[vNum]) {
             const kwanjuBtn = lineEl.createEl("a", { text: "[\uAD00\uC8FC]", cls: "strong-kwanju-btn" });
-            kwanjuBtn.style.cssText = "color: #E5C07B; font-weight: bold; margin-left: 2px; margin-right: 6px; cursor: pointer; font-size: 0.9em; text-decoration: underline;";
+            kwanjuBtn.style.cssText = "color: var(--bf-kwanju-btn-color, #1e40af); font-weight: bold; margin-left: 2px; margin-right: 6px; cursor: pointer; font-size: 0.9em; text-decoration: underline;";
             kwanjuBtn.addEventListener("click", (e) => {
               e.preventDefault();
               this.displayKwanjuInBottomPane(`${bookName} ${kv.chapter}:${kv.verse}`, kwanjuMap[vNum]);
@@ -13112,7 +14481,7 @@ var StrongBibleView = class extends import_obsidian.ItemView {
     const kwanjuSection = cardEl.createDiv({ cls: "lexicon-section lexicon-kwanju" });
     kwanjuSection.style.cssText = "border: 1px solid var(--border-color); border-radius: 6px; padding: 10px; background-color: var(--background-secondary); font-size: var(--nav-item-size, 13px);";
     const titleEl = kwanjuSection.createEl("h4", { text: `\u{1F517} [\uAD00\uC8FC] ${refTitle} \uAD00\uB828 \uAD6C\uC808`, cls: "lexicon-section-title" });
-    titleEl.style.cssText = "margin-top: 0; margin-bottom: 8px; border-bottom: 1px solid var(--border-color); padding-bottom: 4px; color: #E5C07B; font-size: var(--nav-item-size, 13px); font-weight: bold;";
+    titleEl.style.cssText = "margin-top: 0; margin-bottom: 8px; border-bottom: 1px solid var(--border-color); padding-bottom: 4px; color: var(--bf-kwanju-title-color, #1e40af); font-size: var(--nav-item-size, 13px); font-weight: bold;";
     const contentEl = kwanjuSection.createDiv({ cls: "lexicon-content" });
     contentEl.style.cssText = "line-height: 1.6; color: var(--text-normal); font-size: var(--nav-item-size, 13px);";
     const parts = kwanjuText.split(/<br\s*\/?>/gi).map((p) => p.trim()).filter(Boolean);
@@ -13236,3 +14605,966 @@ var BibleMapView = class extends import_obsidian.ItemView {
  * Leaflet 1.9.4, a JS library for interactive maps. https://leafletjs.com
  * (c) 2010-2023 Vladimir Agafonkin, (c) 2010-2011 CloudMade
  */
+
+/**
+ * ZIP 파일 버퍼를 순수 JS로 풀어서 vault 안에 각 파일로 저장한다.
+ */
+async function smmExtractZipToVault(app, zipBuffer, onProgress) {
+  const adapter = app.vault.adapter;
+  const view = new DataView(zipBuffer.buffer, zipBuffer.byteOffset, zipBuffer.byteLength);
+
+  let eocd = -1;
+  for (let i = zipBuffer.byteLength - 22; i >= Math.max(0, zipBuffer.byteLength - 65557); i--) {
+    if (view.getUint32(i, true) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd === -1) throw new Error('ZIP 파일 형식이 올바르지 않거나 손상되었습니다.');
+
+  const totalEntries = view.getUint16(eocd + 10, true);
+  const cdOffset = view.getUint32(eocd + 16, true);
+  const decoder = new TextDecoder('utf-8');
+
+  const dirCreated = new Set();
+  const ensureDir = async (dirPath) => {
+    if (!dirPath || dirPath === '.' || dirPath === '/') return;
+    if (dirCreated.has(dirPath)) return;
+    const parts = dirPath.split('/');
+    let cur = '';
+    for (const p of parts) {
+      if (!p) continue;
+      cur = cur ? cur + '/' + p : p;
+      if (!dirCreated.has(cur)) {
+        if (!(await adapter.exists(cur))) {
+          try { await adapter.mkdir(cur); } catch (e) {}
+        }
+        dirCreated.add(cur);
+      }
+    }
+  };
+
+  let p = cdOffset;
+  let processed = 0;
+  for (let i = 0; i < totalEntries && p < eocd; i++) {
+    if (view.getUint32(p, true) !== 0x02014b50) break;
+    const method = view.getUint16(p + 10, true);
+    const cSize = view.getUint32(p + 20, true);
+    const uSize = view.getUint32(p + 24, true);
+    const fnLen = view.getUint16(p + 28, true);
+    const extraLen = view.getUint16(p + 30, true);
+    const commentLen = view.getUint16(p + 32, true);
+    const localOffset = view.getUint32(p + 42, true);
+
+    const fnBytes = new Uint8Array(zipBuffer.buffer, zipBuffer.byteOffset + p + 46, fnLen);
+    let relPath = decoder.decode(fnBytes).replace(/\\/g, '/');
+    while (relPath.startsWith('/')) relPath = relPath.slice(1);
+
+    p += 46 + fnLen + extraLen + commentLen;
+
+    if (relPath.endsWith('/')) {
+      await ensureDir(relPath.slice(0, -1));
+      continue;
+    }
+
+    const lastSlash = relPath.lastIndexOf('/');
+    if (lastSlash > 0) {
+      await ensureDir(relPath.slice(0, lastSlash));
+    }
+
+    const localFnLen = view.getUint16(localOffset + 26, true);
+    const localExtraLen = view.getUint16(localOffset + 28, true);
+    const dataOffset = localOffset + 30 + localFnLen + localExtraLen;
+
+    let uncompressedData;
+    if (method === 0) {
+      uncompressedData = new Uint8Array(zipBuffer.buffer, zipBuffer.byteOffset + dataOffset, cSize);
+    } else if (method === 8) {
+      const compData = new Uint8Array(zipBuffer.buffer, zipBuffer.byteOffset + dataOffset, cSize);
+      if (typeof DecompressionStream === 'function') {
+        const ds = new DecompressionStream('deflate-raw');
+        const writer = ds.writable.getWriter();
+        writer.write(compData);
+        writer.close();
+        uncompressedData = new Uint8Array(await new Response(ds.readable).arrayBuffer());
+      } else {
+        throw new Error('DecompressionStream이 지원되지 않는 환경입니다.');
+      }
+    } else {
+      continue;
+    }
+
+    await adapter.writeBinary(relPath, uncompressedData);
+    processed++;
+    if (onProgress && (processed % 5 === 0 || processed === totalEntries)) {
+      onProgress(processed, totalEntries, relPath);
+    }
+  }
+  if (onProgress) onProgress(processed, totalEntries, '완료');
+}
+
+/**
+ * 깃허브 릴리즈에서 성경·원어·글꼴 데이터 ZIP(약 169MB)을 다운로드하여 볼트에 설치
+ */
+async function smmDownloadAndInstallData(plugin, customUrl) {
+  const primaryUrl = customUrl || (plugin.settings && plugin.settings.bibleDataDownloadUrl) ||
+    'https://github.com/hyod9866/ObsidianBibleFinder/releases/download/v1.2.4/sermon_bible_data.zip';
+  const fallbackUrls = [
+    'https://github.com/hyod9866/ObsidianBibleFinder/releases/download/v1.2.3/sermon_bible_data.zip',
+    'https://github.com/hyod9866/ObsidianBibleFinder/releases/download/v1.2.2/sermon_bible_data.zip',
+    'https://github.com/hyod9866/ObsidianSermonMindmap/releases/download/v0.19.0/sermon_bible_data.zip',
+    'https://github.com/hyod9866/ObsidianSermonMindmap/releases/download/v0.18.9/sermon_bible_data.zip'
+  ];
+
+  const notice = new import_obsidian.Notice('📦 성경·원어·글꼴 데이터 다운로드 중... (169MB, 잠시 기다려 주세요)', 0);
+  try {
+    let res = null;
+    const urlsToTry = [primaryUrl, ...fallbackUrls.filter((u) => u !== primaryUrl)];
+    for (let i = 0; i < urlsToTry.length; i++) {
+      try {
+        if (i > 0) notice.setMessage(`📦 1차 주소 확인 후 대체 서버(${i}) 연결 중...`);
+        res = await (0, import_obsidian.requestUrl)({ url: urlsToTry[i], method: 'GET' });
+        if (res && res.status >= 200 && res.status < 300) break;
+      } catch (err) {
+        if (i === urlsToTry.length - 1) throw err;
+      }
+    }
+    if (!res || res.status < 200 || res.status >= 300) {
+      throw new Error(`다운로드 실패 (HTTP ${res ? res.status : '오류'})`);
+    }
+
+    notice.setMessage('📦 다운로드 완료! 볼트에 파일 압축 해제 중...');
+    const zipBytes = new Uint8Array(res.arrayBuffer);
+
+    await smmExtractZipToVault(plugin.app, zipBytes, (cur, total, curFile) => {
+      const pct = Math.round((cur / total) * 100);
+      const fileName = curFile.split('/').pop() || curFile;
+      notice.setMessage(`📦 데이터 설치 중 (${pct}%): ${cur}/${total}\n${fileName}`);
+    });
+
+    notice.hide();
+    new import_obsidian.Notice('✅ 성경, 원어(스트롱), 글꼴 데이터 설치가 완료되었습니다!\n(옵시디언을 재시작하면 모든 화면에 완전히 적용됩니다)', 8000);
+
+    try {
+      if (typeof plugin.loadBibleData === 'function') await plugin.loadBibleData();
+      if (typeof plugin.updateStatusBar === 'function') plugin.updateStatusBar();
+    } catch (e) {}
+    return true;
+  } catch (err) {
+    notice.hide();
+    new import_obsidian.Notice('❌ 데이터 설치 실패: ' + (err && err.message ? err.message : err), 8000);
+    return false;
+  }
+}
+
+
+var VIEW_TYPE_BIBLE_COMPARE = "bible-compare-view";
+var BibleCompareView = class extends import_obsidian.ItemView {
+  constructor(leaf, plugin) {
+    super(leaf);
+    this.plugin = plugin;
+    this.currentQuery = "";
+    this.lastSearchQuery = "";
+    this.history = [];
+    this.wordSearchSummary = null;
+    this.wordSearchLimit = 50;
+    this.pendingWordRefs = null;
+    this.fontSize = this.plugin.settings.compareFontSize || 15;
+  }
+  getViewType() {
+    return VIEW_TYPE_BIBLE_COMPARE;
+  }
+  getDisplayText() {
+    return "성경 역본 비교";
+  }
+  getIcon() {
+    return "columns";
+  }
+  getResultsContainer() {
+    if (this.resultsContainerEl && this.resultsContainerEl.isConnected) {
+      return this.resultsContainerEl;
+    }
+    const container = this.contentEl || (this.containerEl ? (this.containerEl.children[1] || this.containerEl) : null);
+    if (container) {
+      let body = container.querySelector(".bible-compare-body");
+      if (!body) {
+        body = container.createDiv({ cls: "bible-compare-body" });
+        body.style.cssText = "flex: 1 1 0; min-height: 0; height: 100%; overflow-y: auto !important; overflow-x: hidden; -webkit-overflow-scrolling: touch !important; touch-action: pan-y !important; overscroll-behavior-y: contain; padding: 10px 10px 40px 10px; display: block; font-size: " + this.fontSize + "px;";
+      }
+      this.resultsContainerEl = body;
+      return body;
+    }
+    return this.resultsContainerEl;
+  }
+  getSearchInput() {
+    if (this.searchEl && this.searchEl.isConnected) {
+      return this.searchEl;
+    }
+    const container = this.contentEl || (this.containerEl ? (this.containerEl.children[1] || this.containerEl) : null);
+    if (container) {
+      const input = container.querySelector(".bible-compare-search-input");
+      if (input) this.searchEl = input;
+    }
+    return this.searchEl;
+  }
+  async onOpen() {
+    const container = this.contentEl || (this.containerEl ? (this.containerEl.children[1] || this.containerEl) : null);
+    if (!container) return;
+    container.empty();
+    container.addClass("bible-compare-container");
+    container.style.cssText = "display: flex; flex-direction: column; flex: 1 1 0; height: 100%; min-height: 0; overflow: hidden; padding: 0; font-size: var(--nav-item-size, 13px);";
+    container.addEventListener("click", () => {
+      if (this.plugin) this.plugin._lastFocusedBibleViewType = VIEW_TYPE_BIBLE_COMPARE;
+    });
+    container.addEventListener("focusin", () => {
+      if (this.plugin) this.plugin._lastFocusedBibleViewType = VIEW_TYPE_BIBLE_COMPARE;
+    });
+
+    const headerEl = container.createDiv({ cls: "bible-compare-header" });
+
+    // 1행: 검색창 + 검색 버튼
+    const row1El = headerEl.createDiv({ cls: "bible-compare-row1" });
+    this.searchEl = row1El.createEl("input", {
+      type: "text",
+      placeholder: "장절 또는 단어 입력 (예: 요 3:12 / 믿음, 소망, 사랑 / grace and peace)",
+      cls: "bible-compare-search-input"
+    });
+    this.searchEl.setAttribute("enterkeyhint", "search");
+    this.searchEl.addEventListener("focus", () => {
+      if (this.plugin) this.plugin._lastFocusedBibleViewType = VIEW_TYPE_BIBLE_COMPARE;
+    });
+    this.searchEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        if (this.plugin) this.plugin.markManualSearch();
+        this.performSearch(this.searchEl.value);
+      }
+    });
+
+    const searchBtn = row1El.createEl("button", { text: "검색", cls: "bible-compare-btn primary" });
+    searchBtn.addEventListener("click", () => {
+      if (this.plugin) this.plugin.markManualSearch();
+      this.performSearch(this.searchEl.value);
+    });
+
+    // 2행: 원어 전환 버튼 + 지움/본문연동 옵션 + 글자크기
+    const row2El = headerEl.createDiv({ cls: "bible-compare-row2" });
+
+    const strongSwitchBtn = row2El.createEl("button", { text: "📖 원어(스트롱)", cls: "bible-compare-btn", title: "원어(스트롱코드) 성경 화면으로 전환" });
+    strongSwitchBtn.addEventListener("click", () => {
+      if (this.plugin) this.plugin._lastFocusedBibleViewType = VIEW_TYPE_STRONG_BIBLE;
+      this.plugin.activateStrongView(this.currentQuery || (this.searchEl ? this.searchEl.value.trim() : ""));
+    });
+
+    // 지움 체크박스 (기본: true)
+    const clearLabel = row2El.createEl("label", { cls: "bible-compare-option-label" });
+    const clearCheckbox = clearLabel.createEl("input", { type: "checkbox" });
+    clearCheckbox.checked = this.plugin.settings.compareClearOnSearch !== false;
+    clearLabel.createSpan({ text: "지움" });
+    clearLabel.title = "체크 시: 새 검색마다 이전 결과를 지움 / 해제 시: 아래에 계속 누적";
+    clearCheckbox.addEventListener("change", async () => {
+      this.plugin.settings.compareClearOnSearch = clearCheckbox.checked;
+      await this.plugin.saveSettings();
+    });
+
+    // 에디터 연동 체크박스 (스트롱 성경과 설정 동기화)
+    const syncLabel = row2El.createEl("label", { cls: "bible-compare-option-label" });
+    const syncCheckbox = syncLabel.createEl("input", { type: "checkbox" });
+    syncCheckbox.checked = !!(this.plugin.settings.compareAutoSync || this.plugin.settings.strongAutoSync);
+    syncLabel.createSpan({ text: "에디터 연동" });
+    syncLabel.title = "노트 본문에서 커서를 이동하거나 터치할 때 해당 장절을 자동 검색";
+    syncCheckbox.addEventListener("change", async () => {
+      this.plugin.settings.compareAutoSync = syncCheckbox.checked;
+      this.plugin.settings.strongAutoSync = syncCheckbox.checked;
+      await this.plugin.saveSettings();
+      if (syncCheckbox.checked) {
+        this.plugin.handleCursorActivity();
+      }
+    });
+
+    // 절 번호 표시 옵션 (없음 / 숫자만 / (숫자))
+    const verseNumCtrl = row2El.createDiv({ cls: "bible-compare-verse-num-ctrl" });
+    verseNumCtrl.createSpan({ text: "절: " });
+    const verseNumSelect = verseNumCtrl.createEl("select", { cls: "bible-compare-verse-num-select" });
+    verseNumSelect.createEl("option", { value: "paren", text: "(숫자)" });
+    verseNumSelect.createEl("option", { value: "num", text: "숫자만" });
+    verseNumSelect.createEl("option", { value: "none", text: "없음" });
+    verseNumSelect.value = this.plugin.settings.compareVerseNumFormat || "paren";
+    verseNumSelect.title = "성경구절 절 번호 표시 형식 (여러 절 표시 시 적용)";
+    verseNumSelect.addEventListener("change", async () => {
+      this.plugin.settings.compareVerseNumFormat = verseNumSelect.value;
+      await this.plugin.saveSettings();
+      this.renderResults();
+    });
+
+    // 글자 크기 조절
+    const fontCtrl = row2El.createDiv({ cls: "bible-compare-font-ctrl" });
+    fontCtrl.createSpan({ text: "글자: " });
+    const fontMinusBtn = fontCtrl.createEl("button", { text: "A-", cls: "bible-compare-font-btn" });
+    const fontDisplaySpan = fontCtrl.createSpan({ text: this.fontSize + "px", cls: "bible-compare-font-size-text" });
+    const fontPlusBtn = fontCtrl.createEl("button", { text: "A+", cls: "bible-compare-font-btn" });
+
+    const updateFontSize = async (delta) => {
+      this.fontSize = Math.max(11, Math.min(26, this.fontSize + delta));
+      fontDisplaySpan.setText(this.fontSize + "px");
+      this.resultsContainerEl.style.fontSize = this.fontSize + "px";
+      this.plugin.settings.compareFontSize = this.fontSize;
+      await this.plugin.saveSettings();
+    };
+    fontMinusBtn.addEventListener("click", () => updateFontSize(-1));
+    fontPlusBtn.addEventListener("click", () => updateFontSize(1));
+
+    // 3행: 역본 선택 체크박스들
+    const row3Wrapper = headerEl.createDiv();
+    row3Wrapper.style.cssText = "display: flex; flex-direction: column; gap: 4px;";
+
+    const row3Header = row3Wrapper.createDiv({ cls: "bible-compare-row3-header" });
+    row3Header.createSpan({ text: "성경 역본 선택:", cls: "bible-compare-sec-title" });
+    const btnGroup = row3Header.createDiv({ cls: "bible-compare-btn-group" });
+    const selectAllBtn = btnGroup.createEl("button", { text: "전체 선택", cls: "bible-compare-mini-btn", title: "모든 성경 역본 선택" });
+    const deselectAllBtn = btnGroup.createEl("button", { text: "전체 해제", cls: "bible-compare-mini-btn", title: "모든 성경 역본 선택 해제" });
+
+    this.versionsContainerEl = row3Wrapper.createDiv({ cls: "bible-compare-row3-versions" });
+    this.renderVersionChips();
+
+    selectAllBtn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      const allNames = Array.from(this.plugin.bibles.values()).map(b => b.name);
+      this.plugin.settings.compareSelectedVersions = allNames;
+      await this.plugin.saveSettings();
+      this.renderVersionChips();
+      if (this.history.length > 0) this.reSearchLast();
+    });
+
+    deselectAllBtn.addEventListener("click", async (e) => {
+      e.preventDefault();
+      this.plugin.settings.compareSelectedVersions = [];
+      await this.plugin.saveSettings();
+      this.renderVersionChips();
+      if (this.history.length > 0) this.reSearchLast();
+    });
+
+    // 본문 결과 영역
+    this.resultsContainerEl = container.createDiv({ cls: "bible-compare-body" });
+    this.resultsContainerEl.style.cssText = "flex: 1 1 0; min-height: 0; height: 100%; overflow-y: auto !important; overflow-x: hidden; -webkit-overflow-scrolling: touch !important; touch-action: pan-y !important; overscroll-behavior-y: contain; padding: 10px 10px 40px 10px; display: block; font-size: " + this.fontSize + "px;";
+    if (this.currentQuery) {
+      this.performSearch(this.currentQuery);
+    } else {
+      this.renderResults();
+    }
+  }
+
+  getDefaultVersions() {
+    const available = Array.from(this.plugin.bibles.values()).map(b => b.name);
+    const preferred = ["개역한글", "개역개정4판", "개역개정(국한문)", "킹제임스흠정역성경", "eNKJV", "eNIV2011", "eESV"];
+    const found = preferred.filter(p => available.includes(p));
+    return found.length > 0 ? found : available.slice(0, 4);
+  }
+
+  renderVersionChips() {
+    this.versionsContainerEl.empty();
+    const available = Array.from(this.plugin.bibles.values());
+    if (available.length === 0) {
+      this.versionsContainerEl.createSpan({ text: "로드된 성경이 없습니다 (_bibles 확인)", style: "font-size: 0.8em; color: var(--text-muted);" });
+      return;
+    }
+
+    let selected = this.plugin.settings.compareSelectedVersions;
+    if (!Array.isArray(selected)) {
+      selected = this.getDefaultVersions();
+      this.plugin.settings.compareSelectedVersions = selected;
+    }
+
+    available.forEach(bible => {
+      const isSelected = selected.includes(bible.name);
+      let cleanLabel = bible.name;
+      if (cleanLabel.startsWith("e")) cleanLabel = cleanLabel.substring(1);
+
+      const chip = this.versionsContainerEl.createEl("span", {
+        cls: "bible-compare-version-chip" + (isSelected ? " active" : ""),
+        text: cleanLabel
+      });
+
+      chip.addEventListener("click", async () => {
+        const curSelected = new Set(this.plugin.settings.compareSelectedVersions || []);
+        if (curSelected.has(bible.name)) {
+          curSelected.delete(bible.name);
+        } else {
+          curSelected.add(bible.name);
+        }
+        this.plugin.settings.compareSelectedVersions = Array.from(curSelected);
+        await this.plugin.saveSettings();
+        this.renderVersionChips();
+        if (this.history.length > 0) {
+          this.reSearchLast();
+        }
+      });
+    });
+  }
+
+  reSearchLast() {
+    const q = this.lastSearchQuery || (this.history.length > 0 && this.history[this.history.length - 1]?.query);
+    if (q) {
+      this.performSearch(q, true);
+    }
+  }
+
+  parseWordSearchTerms(input) {
+    if (!input) return [];
+    const rawParts = String(input)
+      .split(/,|\s+and\s+|\s*&\s*/i)
+      .map((t) => t.trim().toLowerCase())
+      .filter(Boolean);
+    return Array.from(new Set(rawParts));
+  }
+
+  resolveSelectedBibleObjects(selectedVersionNames) {
+    const list = [];
+    const seenIds = new Set();
+    if (!Array.isArray(selectedVersionNames)) return list;
+    for (const vName of selectedVersionNames) {
+      let bibleObj = null;
+      for (const b of this.plugin.bibles.values()) {
+        if (b.name === vName || b.id === vName || b.name.replace(/^e/, "") === vName.replace(/^e/, "")) {
+          bibleObj = b;
+          break;
+        }
+      }
+      if (bibleObj && !seenIds.has(bibleObj.name)) {
+        seenIds.add(bibleObj.name);
+        list.push(bibleObj);
+      }
+    }
+    return list;
+  }
+
+  buildCompareCardForRef(parsedRef, selectedBibleObjs, highlightTerms = null) {
+    const results = [];
+    for (const bibleObj of selectedBibleObjs) {
+      const verses = [];
+      const bookMap = bibleObj.index.get(parsedRef.standardBook);
+      if (bookMap) {
+        const chapterMap = bookMap.get(parsedRef.chapter);
+        if (chapterMap) {
+          if (parsedRef.startVerse !== null && parsedRef.endVerse !== null) {
+            for (let v = parsedRef.startVerse; v <= parsedRef.endVerse; v++) {
+              const vObj = chapterMap.get(v);
+              if (vObj) verses.push(vObj);
+            }
+          } else {
+            const sortedKeys = Array.from(chapterMap.keys()).sort((a, b) => a - b);
+            sortedKeys.forEach((k) => verses.push(chapterMap.get(k)));
+          }
+        }
+      }
+      if (verses.length > 0) {
+        results.push({
+          versionName: bibleObj.name,
+          isEng: bibleObj.name.startsWith("e") || !!ENGLISH_VERSION_FULL_NAMES[bibleObj.name.replace(/^e/, "")],
+          verses
+        });
+      }
+    }
+    return results;
+  }
+
+  async performSearch(query, isRefresh = false) {
+    if (this.plugin) this.plugin._lastFocusedBibleViewType = VIEW_TYPE_BIBLE_COMPARE;
+    if (!query || !query.trim()) return;
+    const cleanQuery = query.trim();
+
+    this.currentQuery = cleanQuery;
+    this.lastSearchQuery = cleanQuery;
+    const sInput = typeof this.getSearchInput === "function" ? this.getSearchInput() : this.searchEl;
+    if (sInput && sInput.value !== cleanQuery) sInput.value = cleanQuery;
+
+    const resContainer = this.getResultsContainer();
+    if (!resContainer) {
+      setTimeout(() => this.performSearch(cleanQuery, isRefresh), 80);
+      return;
+    }
+    this.resultsContainerEl = resContainer;
+
+    // 즉각적인 검색 반응 피드백: 이전 결과가 있더라도 새 검색 시작 시 로딩 상태 표시
+    const clearOnSearch = this.plugin.settings.compareClearOnSearch !== false;
+    if (clearOnSearch || this.history.length === 0) {
+      resContainer.empty();
+      resContainer.createDiv({
+        text: "📖 성경 역본 불러오는 중...",
+        cls: "loading-text",
+        style: "color: var(--text-muted); text-align: center; padding: 24px; font-style: italic; font-size: 0.95em;"
+      });
+    }
+
+    try {
+      if (!this.plugin.bibles || this.plugin.bibles.size === 0) {
+        await this.plugin.loadBibleData();
+      }
+
+      let selectedVersionNames = this.plugin.settings.compareSelectedVersions;
+      const availableBibles = Array.from(this.plugin.bibles.values());
+      const availableNames = availableBibles.map(b => b.name);
+      if (availableNames.length > 0) {
+        if (!Array.isArray(selectedVersionNames)) {
+          selectedVersionNames = this.getDefaultVersions();
+          this.plugin.settings.compareSelectedVersions = selectedVersionNames;
+          await this.plugin.saveSettings();
+          if (typeof this.renderVersionChips === "function") this.renderVersionChips();
+        }
+      }
+
+      const selectedBibleObjs = this.resolveSelectedBibleObjects(selectedVersionNames);
+      const parsed = this.parseRef(cleanQuery);
+
+      if (!parsed) {
+        // 장절이 아니면 선택된 역본들 내에서 단어 AND 검색 (, 또는 and 구분으로 개수 제한 없음)
+        const terms = this.parseWordSearchTerms(cleanQuery);
+        if (terms.length === 0) {
+          this.wordSearchSummary = null;
+          this.pendingWordRefs = null;
+          resContainer.empty();
+          resContainer.createDiv({
+            text: "⚠️ 장절 또는 검색할 단어를 입력하세요.\n(예: 요 3:12 / 믿음, 소망, 사랑 / 은혜 and 평강)",
+            cls: "error-text",
+            style: "color: var(--text-muted); text-align: center; padding: 24px; white-space: pre-line;"
+          });
+          return;
+        }
+        if (selectedBibleObjs.length === 0) {
+          this.wordSearchSummary = { query: cleanQuery, terms, totalCount: 0, noVersions: true };
+          this.pendingWordRefs = null;
+          this.history = [];
+          this.renderResults();
+          return;
+        }
+
+        const matchedMap = new Map();
+        for (const bibleObj of selectedBibleObjs) {
+          const allVerses = Array.isArray(bibleObj.verses) ? bibleObj.verses : [];
+          for (const v of allVerses) {
+            const cLower = (v.content || "").toLowerCase();
+            if (terms.every((t) => cLower.includes(t))) {
+              const key = `${v.book}|${v.chapter}|${v.verse}`;
+              if (!matchedMap.has(key)) {
+                matchedMap.set(key, {
+                  standardBook: v.book,
+                  chapter: v.chapter,
+                  verse: v.verse
+                });
+              }
+            }
+          }
+        }
+
+        const sortedRefs = Array.from(matchedMap.values()).sort((a, b) => {
+          const orderA = BIBLE_ORDER_MAP.has(a.standardBook) ? BIBLE_ORDER_MAP.get(a.standardBook) : 999;
+          const orderB = BIBLE_ORDER_MAP.has(b.standardBook) ? BIBLE_ORDER_MAP.get(b.standardBook) : 999;
+          if (orderA !== orderB) return orderA - orderB;
+          if (a.chapter !== b.chapter) return a.chapter - b.chapter;
+          return a.verse - b.verse;
+        });
+
+        this.wordSearchLimit = isRefresh ? Math.max(50, this.wordSearchLimit || 50) : 50;
+        this.pendingWordRefs = {
+          query: cleanQuery,
+          terms,
+          sortedRefs,
+          selectedBibleObjs
+        };
+        this.wordSearchSummary = {
+          query: cleanQuery,
+          terms,
+          totalCount: sortedRefs.length,
+          versionCount: selectedBibleObjs.length
+        };
+
+        this.history = sortedRefs.slice(0, this.wordSearchLimit).map((m, idx) => {
+          const bookFullName = BIBLE_FULL_NAMES[m.standardBook] || m.standardBook;
+          const bookEng = BIBLE_ENGLISH_NAMES[m.standardBook] ? BIBLE_ENGLISH_NAMES[m.standardBook].full : "";
+          const parsedRef = {
+            rawBook: m.standardBook,
+            standardBook: m.standardBook,
+            bookFullName,
+            bookEng,
+            chapter: m.chapter,
+            startVerse: m.verse,
+            endVerse: m.verse
+          };
+          return {
+            id: `${Date.now()}_${idx}`,
+            query: cleanQuery,
+            parsed: parsedRef,
+            highlightTerms: terms,
+            results: this.buildCompareCardForRef(parsedRef, selectedBibleObjs, terms)
+          };
+        });
+
+        this.renderResults();
+        return;
+      }
+
+      // 장절 검색 모드
+      this.wordSearchSummary = null;
+      this.pendingWordRefs = null;
+      let results = this.buildCompareCardForRef(parsed, selectedBibleObjs);
+
+      // 만약 사용자가 역본을 선택했으나 해당 역본에서 결과를 전혀 못 찾았고 사용 가능한 다른 역본이 있다면 기본 역본으로 폴백 시도
+      // (선택된 역본이 0개인 경우는 사용자가 전체 해제한 것이므로 폴백하지 않음)
+      if (results.length === 0 && selectedVersionNames && selectedVersionNames.length > 0 && availableNames.length > 0) {
+        const fallbackObjs = this.resolveSelectedBibleObjects(this.getDefaultVersions());
+        results = this.buildCompareCardForRef(parsed, fallbackObjs);
+      }
+
+      const historyItem = {
+        id: Date.now().toString(),
+        query: cleanQuery,
+        parsed,
+        results
+      };
+
+      if (clearOnSearch || isRefresh) {
+        if (isRefresh && this.history.length > 0) {
+          this.history[this.history.length - 1] = historyItem;
+        } else {
+          this.history = [historyItem];
+        }
+      } else {
+        this.history.push(historyItem);
+      }
+
+      this.renderResults();
+    } catch (err) {
+      console.error("BibleCompareView.performSearch error:", err);
+      if (resContainer) {
+        resContainer.empty();
+        resContainer.createDiv({
+          text: `⚠️ 조회 중 오류가 발생했습니다: ${err && err.message ? err.message : err}`,
+          cls: "error-text",
+          style: "color: var(--text-error, #f87171); text-align: center; padding: 24px;"
+        });
+      }
+    }
+  }
+
+  parseRef(input) {
+    if (!input) return null;
+    let clean = input.trim();
+    // 앞뒤의 괄호 (), [], {}, <>, 【】, 「」, 『』, 따옴표, 마침표 등 제거
+    clean = clean.replace(/^[\(\[\{<【「『"'\s]+|[\)\]\}>】」』"'\s.]+$/g, "").trim();
+
+    const regex = /((?:[1-3]\s*)?[가-힣a-zA-Z]{1,10}(?:[1-3]서)?)\s*(\d{1,3})(?:\s*[:：장]\s*(\d{1,3})(?:\s*[-~–,]\s*(\d{1,3}))?)?(?:\s*절)?/;
+    let match = clean.match(regex);
+    if (!match) {
+      match = input.match(regex);
+    }
+    if (!match) return null;
+
+    const rawBook = match[1];
+    const chapter = parseInt(match[2], 10);
+    const startVerse = match[3] ? parseInt(match[3], 10) : null;
+    const endVerse = match[4] ? parseInt(match[4], 10) : startVerse;
+    const standardBook = getStandardBookCode(rawBook, this.plugin.customBookMap);
+    if (!BIBLE_ORDER_MAP.has(standardBook)) return null;
+    const bookFullName = BIBLE_FULL_NAMES[standardBook] || standardBook;
+    const bookEng = BIBLE_ENGLISH_NAMES[standardBook] ? BIBLE_ENGLISH_NAMES[standardBook].full : "";
+    return {
+      rawBook,
+      standardBook,
+      bookFullName,
+      bookEng,
+      chapter,
+      startVerse,
+      endVerse
+    };
+  }
+
+  appendHighlightedText(parentEl, text, highlightTerms) {
+    if (!highlightTerms || highlightTerms.length === 0 || !text) {
+      parentEl.appendText(text || "");
+      return;
+    }
+    const sortedTerms = Array.from(new Set(highlightTerms.filter(Boolean))).sort((a, b) => b.length - a.length);
+    if (sortedTerms.length === 0) {
+      parentEl.appendText(text);
+      return;
+    }
+    const escaped = sortedTerms.map((t) => t.replace(/[-\/\\^$*+?.()|[\]{}]/g, "\\$&"));
+    const re = new RegExp(`(${escaped.join("|")})`, "gi");
+    const termColorIdx = new Map();
+    highlightTerms.forEach((t, idx) => {
+      if (!termColorIdx.has(t.toLowerCase())) termColorIdx.set(t.toLowerCase(), idx % 5);
+    });
+    let lastIdx = 0;
+    let m;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > lastIdx) {
+        parentEl.appendText(text.slice(lastIdx, m.index));
+      }
+      const matchedLower = m[0].toLowerCase();
+      const cIdx = termColorIdx.has(matchedLower) ? termColorIdx.get(matchedLower) : 0;
+      parentEl.createSpan({
+        cls: `bible-compare-hl bible-compare-hl-${cIdx}`,
+        text: m[0]
+      });
+      lastIdx = re.lastIndex;
+      if (m[0].length === 0) break;
+    }
+    if (lastIdx < text.length) {
+      parentEl.appendText(text.slice(lastIdx));
+    }
+  }
+
+  renderResults() {
+    const resContainer = this.getResultsContainer();
+    if (!resContainer) return;
+    this.resultsContainerEl = resContainer;
+    resContainer.empty();
+
+    if (this.wordSearchSummary) {
+      const ws = this.wordSearchSummary;
+      const banner = resContainer.createDiv({ cls: "bible-compare-word-banner" });
+      if (ws.noVersions) {
+        banner.setText("⚠️ 선택된 성경 역본이 없습니다. 상단에서 원하는 역본을 선택해 주세요.");
+        return;
+      }
+      const termsLabel = ws.terms.map((t) => `"${t}"`).join(" · ");
+      if (ws.totalCount === 0) {
+        banner.setText(`🔍 단어 검색: ${termsLabel} (AND) — 선택한 ${ws.versionCount}개 역본에서 일치하는 구절이 없습니다.`);
+        return;
+      }
+      const shownCount = Math.min(this.history.length, ws.totalCount);
+      banner.setText(`🔍 단어 검색: ${termsLabel} (AND) — 선택 ${ws.versionCount}개 역본 기준 총 ${ws.totalCount.toLocaleString()}절 일치 (${shownCount}절 표시)`);
+    }
+
+    if (this.history.length === 0) {
+      const emptyDiv = resContainer.createDiv({ cls: "bible-compare-empty" });
+      emptyDiv.createEl("div", { text: "📖", style: "font-size: 2.2em; margin-bottom: 8px;" });
+      emptyDiv.createEl("div", { text: "성경 장절이나 검색할 단어를 입력하고 Enter를 누르세요.", style: "font-weight: 500;" });
+      emptyDiv.createEl("div", { text: "예: 요 3:12  |  롬 8:28-30  |  믿음, 소망, 사랑  |  은혜 and 평강", style: "font-size: 0.85em; margin-top: 4px; opacity: 0.8;" });
+      return;
+    }
+
+    this.history.forEach((item, index) => {
+      const card = resContainer.createDiv({ cls: "bible-compare-card" });
+
+      const cardHeader = card.createDiv({ cls: "bible-compare-card-header" });
+      const refTitle = cardHeader.createDiv({ cls: "bible-compare-card-title" });
+
+      let refText = item.parsed.bookFullName + " " + item.parsed.chapter;
+      if (item.parsed.startVerse !== null) {
+        if (item.parsed.startVerse === item.parsed.endVerse) {
+          refText += ":" + item.parsed.startVerse;
+        } else {
+          refText += ":" + item.parsed.startVerse + "-" + item.parsed.endVerse;
+        }
+      }
+      refTitle.createSpan({ text: refText });
+      if (item.parsed.bookEng) {
+        refTitle.createSpan({ text: "(" + item.parsed.bookEng + ")", style: "font-size: 0.8em; font-weight: normal; color: var(--text-muted);" });
+      }
+
+      const actions = cardHeader.createDiv({ cls: "bible-compare-card-actions" });
+
+      const strongBtn = actions.createEl("button", { cls: "bible-compare-card-btn", text: "📖 원어", title: "스트롱 원어로 보기" });
+      strongBtn.addEventListener("click", () => {
+        const strongRef = `${item.parsed.standardBook} ${item.parsed.chapter}${item.parsed.startVerse ? `:${item.parsed.startVerse}` : ""}`;
+        this.plugin.activateStrongView(strongRef);
+      });
+
+      const copyBtn = actions.createEl("button", { cls: "bible-compare-card-btn", text: "📋 복사", title: "이 구절 전체 역본 클립보드 복사" });
+      copyBtn.addEventListener("click", () => {
+        const textToCopy = this.formatItemForCopy(item);
+        navigator.clipboard.writeText(textToCopy);
+        new import_obsidian.Notice("복사 완료: " + refText);
+      });
+
+      const insertBtn = actions.createEl("button", { cls: "bible-compare-card-btn", text: "✏️ 삽입", title: "현재 열린 노트에 삽입" });
+      insertBtn.addEventListener("click", () => {
+        const textToInsert = this.formatItemForCopy(item);
+        const editor = this.plugin.getTargetEditor();
+        if (editor) {
+          const cursor = editor.getCursor ? editor.getCursor() : null;
+          if (cursor) {
+            editor.replaceRange(textToInsert + "\n", cursor);
+            const lines = textToInsert.split("\n");
+            if (editor.setCursor) {
+              editor.setCursor({ line: cursor.line + lines.length, ch: 0 });
+            }
+          } else {
+            const lastLine = editor.lineCount ? editor.lineCount() : 0;
+            editor.replaceRange("\n" + textToInsert + "\n", { line: lastLine, ch: 0 });
+          }
+          new import_obsidian.Notice("노트에 삽입 완료: " + refText);
+        } else {
+          navigator.clipboard.writeText(textToInsert);
+          new import_obsidian.Notice("열린 마크다운 노트가 없어 클립보드에 복사되었습니다.\n(노트를 열고 Ctrl+V로 붙여넣으세요)");
+        }
+      });
+
+      if (this.history.length > 1) {
+        const delBtn = actions.createEl("button", { cls: "bible-compare-card-btn", text: "✕", title: "이 구절 지우기" });
+        delBtn.addEventListener("click", () => {
+          this.history.splice(index, 1);
+          this.renderResults();
+        });
+      }
+
+      const content = card.createDiv({ cls: "bible-compare-card-content" });
+      if (item.results.length === 0) {
+        const noVerSelected = (this.plugin.settings.compareSelectedVersions || []).length === 0;
+        const msg = noVerSelected ? "선택된 성경 역본이 없습니다. 상단에서 원하는 역본을 선택해 주세요." : "선택된 역본에서 해당 구절을 찾을 수 없습니다.";
+        content.createDiv({ text: msg, style: "color: var(--text-muted); font-size: 0.9em; padding: 4px 0;" });
+      } else {
+        item.results.forEach(res => {
+          const rowItem = content.createDiv({ cls: "bible-compare-row-item" });
+
+          let cleanVName = res.versionName;
+          if (cleanVName.startsWith("e")) cleanVName = cleanVName.substring(1);
+
+          const badge = rowItem.createSpan({
+            cls: "bible-compare-badge" + (res.isEng ? " eng" : ""),
+            text: cleanVName,
+            title: "클릭 시 이 역본만 복사 (" + res.versionName + ")"
+          });
+          badge.style.cursor = "pointer";
+
+          const textEl = rowItem.createSpan({ cls: "bible-compare-text" });
+          const verseFormat = this.plugin.settings.compareVerseNumFormat || "paren";
+          const isMulti = res.verses.length > 1;
+
+          res.verses.forEach((v, vIdx) => {
+            if (vIdx > 0) textEl.appendText(" ");
+            if (isMulti && verseFormat !== "none") {
+              const numSpan = textEl.createSpan({ cls: "bible-compare-verse-num" });
+              numSpan.setText(verseFormat === "num" ? String(v.verse) : `(${v.verse})`);
+              textEl.appendText(" ");
+            }
+            this.appendHighlightedText(textEl, v.content, item.highlightTerms);
+          });
+
+          badge.addEventListener("click", () => {
+            const singleCopy = this.formatSingleVersionLine(item, res);
+            navigator.clipboard.writeText(singleCopy);
+            new import_obsidian.Notice(cleanVName + " 구절 복사됨");
+          });
+        });
+      }
+    });
+
+    if (this.pendingWordRefs && this.history.length < this.pendingWordRefs.sortedRefs.length) {
+      const rem = this.pendingWordRefs.sortedRefs.length - this.history.length;
+      const moreWrap = resContainer.createDiv({ cls: "bible-compare-more-wrap" });
+      const moreBtn = moreWrap.createEl("button", {
+        cls: "bible-compare-more-btn",
+        text: `더 보기 (+${Math.min(50, rem)}절 / 남은 ${rem.toLocaleString()}절)`
+      });
+      moreBtn.addEventListener("click", () => {
+        const prevScroll = resContainer.scrollTop;
+        const p = this.pendingWordRefs;
+        const nextSlice = p.sortedRefs.slice(this.history.length, this.history.length + 50);
+        this.wordSearchLimit += 50;
+        const appended = nextSlice.map((m, i2) => {
+          const bookFullName = BIBLE_FULL_NAMES[m.standardBook] || m.standardBook;
+          const bookEng = BIBLE_ENGLISH_NAMES[m.standardBook] ? BIBLE_ENGLISH_NAMES[m.standardBook].full : "";
+          const parsedRef = {
+            rawBook: m.standardBook,
+            standardBook: m.standardBook,
+            bookFullName,
+            bookEng,
+            chapter: m.chapter,
+            startVerse: m.verse,
+            endVerse: m.verse
+          };
+          return {
+            id: `${Date.now()}_more_${this.history.length + i2}`,
+            query: p.query,
+            parsed: parsedRef,
+            highlightTerms: p.terms,
+            results: this.buildCompareCardForRef(parsedRef, p.selectedBibleObjs, p.terms)
+          };
+        });
+        this.history.push(...appended);
+        this.renderResults();
+        setTimeout(() => { resContainer.scrollTop = prevScroll; }, 10);
+      });
+    }
+
+    setTimeout(() => {
+      const c = this.getResultsContainer();
+      if (!c) return;
+      const clearOnSearch = this.plugin.settings.compareClearOnSearch !== false;
+      if (this.wordSearchSummary || clearOnSearch || this.history.length <= 1) {
+        if (!this.wordSearchSummary || this.history.length <= 50) c.scrollTop = 0;
+      } else {
+        const cards = c.querySelectorAll(".bible-compare-card");
+        if (cards.length > 0) {
+          const lastCard = cards[cards.length - 1];
+          if (lastCard && typeof lastCard.scrollIntoView === "function") {
+            lastCard.scrollIntoView({ behavior: "smooth", block: "start" });
+          }
+        }
+      }
+    }, 50);
+  }
+
+  formatSingleVersionLine(item, res) {
+    if (!item || !item.parsed || !res || !res.verses || res.verses.length === 0) return "";
+    const firstV = res.verses[0] || {};
+    const isEng = res.isEng;
+    const engFormat = this.plugin.settings.englishBookFormat;
+    const korFormat = this.plugin.settings.koreanBookFormat;
+    let bookDisplay = "";
+    if (isEng) {
+      const engName = BIBLE_ENGLISH_NAMES[item.parsed.standardBook];
+      if (engName) {
+        bookDisplay = engFormat === "full" ? engName.full : (engFormat === "short" ? engName.short : (firstV.rawBook || engName.short));
+      } else {
+        bookDisplay = item.parsed.standardBook;
+      }
+    } else {
+      if (korFormat === "full") {
+        bookDisplay = BIBLE_FULL_NAMES[item.parsed.standardBook] || item.parsed.standardBook;
+      } else if (korFormat === "raw") {
+        bookDisplay = firstV.rawBook || item.parsed.rawBook || item.parsed.standardBook;
+      } else {
+        bookDisplay = item.parsed.standardBook;
+      }
+    }
+
+    let refNum = `${item.parsed.chapter}`;
+    if (item.parsed.startVerse !== null) {
+      if (item.parsed.startVerse === item.parsed.endVerse || item.parsed.endVerse === null) {
+        refNum += `:${item.parsed.startVerse}`;
+      } else {
+        refNum += `:${item.parsed.startVerse}-${item.parsed.endVerse}`;
+      }
+    }
+    let fullRefText = wrapBracket(`${bookDisplay} ${refNum}`, this.plugin.settings.bracketBook);
+
+    let cleanVName = res.versionName;
+    if (cleanVName.startsWith("e")) cleanVName = cleanVName.substring(1);
+
+    const verseFormat = this.plugin.settings.compareVerseNumFormat || "paren";
+    const isMulti = res.verses.length > 1;
+
+    const bodyText = res.verses.map(v => {
+      if (isMulti && verseFormat !== "none") {
+        if (verseFormat === "num") {
+          return `${v.verse} ${v.content}`;
+        }
+        return `(${v.verse}) ${v.content}`;
+      }
+      return v.content;
+    }).join(" ");
+
+    return `${fullRefText} [${cleanVName}] ${bodyText}`;
+  }
+
+  formatItemForCopy(item) {
+    const lines = [];
+    item.results.forEach(res => {
+      const line = this.formatSingleVersionLine(item, res);
+      if (line) lines.push(line);
+    });
+    return lines.join("\n");
+  }
+};
