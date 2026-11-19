@@ -1195,7 +1195,8 @@ body.theme-dark .bible-compare-verse-num,
 .bible-compare-row3-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
+  gap: 8px;
   margin-top: 2px;
 }
 

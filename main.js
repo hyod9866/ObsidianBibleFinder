@@ -14849,7 +14849,7 @@ var BibleCompareView = class extends import_obsidian.ItemView {
     // 2행: 원어 전환 버튼 + 지움/본문연동 옵션 + 글자크기
     const row2El = headerEl.createDiv({ cls: "bible-compare-row2" });
 
-    const strongSwitchBtn = row2El.createEl("button", { text: "📖 원어(스트롱)", cls: "bible-compare-btn", title: "원어(스트롱코드) 성경 화면으로 전환" });
+    const strongSwitchBtn = row2El.createEl("button", { text: "📖 원어(스트롱)", cls: "bible-compare-btn bible-compare-strong-btn", title: "원어(스트롱코드) 성경 화면으로 전환" });
     strongSwitchBtn.addEventListener("click", () => {
       if (this.plugin) this.plugin._lastFocusedBibleViewType = VIEW_TYPE_STRONG_BIBLE;
       this.plugin.activateStrongView(this.currentQuery || (this.searchEl ? this.searchEl.value.trim() : ""));
@@ -14881,21 +14881,6 @@ var BibleCompareView = class extends import_obsidian.ItemView {
       }
     });
 
-    // 절 번호 표시 옵션 (없음 / 숫자만 / (숫자))
-    const verseNumCtrl = row2El.createDiv({ cls: "bible-compare-verse-num-ctrl" });
-    verseNumCtrl.createSpan({ text: "절: " });
-    const verseNumSelect = verseNumCtrl.createEl("select", { cls: "bible-compare-verse-num-select" });
-    verseNumSelect.createEl("option", { value: "paren", text: "(숫자)" });
-    verseNumSelect.createEl("option", { value: "num", text: "숫자만" });
-    verseNumSelect.createEl("option", { value: "none", text: "없음" });
-    verseNumSelect.value = this.plugin.settings.compareVerseNumFormat || "paren";
-    verseNumSelect.title = "성경구절 절 번호 표시 형식 (여러 절 표시 시 적용)";
-    verseNumSelect.addEventListener("change", async () => {
-      this.plugin.settings.compareVerseNumFormat = verseNumSelect.value;
-      await this.plugin.saveSettings();
-      this.renderResults();
-    });
-
     // 글자 크기 조절
     const fontCtrl = row2El.createDiv({ cls: "bible-compare-font-ctrl" });
     fontCtrl.createSpan({ text: "글자: " });
@@ -14912,6 +14897,21 @@ var BibleCompareView = class extends import_obsidian.ItemView {
     };
     fontMinusBtn.addEventListener("click", () => updateFontSize(-1));
     fontPlusBtn.addEventListener("click", () => updateFontSize(1));
+
+    // 절 번호 표시 옵션 (글자 크기 A+ 우측 배치)
+    const verseNumCtrl = row2El.createDiv({ cls: "bible-compare-verse-num-ctrl" });
+    verseNumCtrl.createSpan({ text: "절: " });
+    const verseNumSelect = verseNumCtrl.createEl("select", { cls: "bible-compare-verse-num-select" });
+    verseNumSelect.createEl("option", { value: "paren", text: "(숫자)" });
+    verseNumSelect.createEl("option", { value: "num", text: "숫자만" });
+    verseNumSelect.createEl("option", { value: "none", text: "없음" });
+    verseNumSelect.value = this.plugin.settings.compareVerseNumFormat || "paren";
+    verseNumSelect.title = "성경구절 절 번호 표시 형식 (여러 절 표시 시 적용)";
+    verseNumSelect.addEventListener("change", async () => {
+      this.plugin.settings.compareVerseNumFormat = verseNumSelect.value;
+      await this.plugin.saveSettings();
+      this.renderResults();
+    });
 
     // 3행: 역본 선택 체크박스들
     const row3Wrapper = headerEl.createDiv();
