@@ -880,7 +880,7 @@ svg.leaflet-image-layer.leaflet-interactive path {
 .lexicon-content p,
 .lexicon-content div,
 .lexicon-content span {
-	font-size: var(--nav-item-size, 13px) !important;
+	font-size: inherit !important;
 }
 
 /* ------------------------------------------------------------------
@@ -1267,8 +1267,15 @@ body.theme-dark .bible-compare-verse-num,
 .strong-bible-verses-pane .strong-code-link,
 .strong-bible-lexicon-pane,
 .strong-bible-lexicon-pane .lexicon-section,
+.strong-bible-lexicon-pane .lexicon-section-title,
 .strong-bible-lexicon-pane .lexicon-content,
-.strong-bible-lexicon-pane .kwanju-pane-line {
+.strong-bible-lexicon-pane .lexicon-content font,
+.strong-bible-lexicon-pane .lexicon-content p,
+.strong-bible-lexicon-pane .lexicon-content div,
+.strong-bible-lexicon-pane .lexicon-content span,
+.strong-bible-lexicon-pane .kwanju-pane-line,
+.strong-bible-lexicon-pane .kwanju-pane-line span,
+.strong-bible-lexicon-pane .kwanju-verse-link {
   font-size: inherit !important;
 }
 

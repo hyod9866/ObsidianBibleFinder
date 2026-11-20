@@ -13931,6 +13931,8 @@ var StrongBibleView = class extends import_obsidian.ItemView {
     const sFontPlus = strongFontCtrl.createEl("button", { text: "A+", cls: "bible-compare-font-btn" });
 
     const applyStrongFontSize = (size) => {
+      if (this.versesContainerEl) this.versesContainerEl.style.fontSize = `${size}px`;
+      if (this.lexiconContainerEl) this.lexiconContainerEl.style.fontSize = `${size}px`;
       let dynStyle = document.getElementById("strong-bible-dynamic-font-style");
       if (!dynStyle) {
         dynStyle = document.createElement("style");
@@ -13950,8 +13952,16 @@ var StrongBibleView = class extends import_obsidian.ItemView {
         .strong-bible-lexicon-pane,
         .strong-bible-lexicon-pane *,
         .strong-bible-lexicon-pane .lexicon-section,
+        .strong-bible-lexicon-pane .lexicon-section-title,
         .strong-bible-lexicon-pane .lexicon-content,
-        .strong-bible-lexicon-pane .kwanju-pane-line {
+        .strong-bible-lexicon-pane .lexicon-content *,
+        .strong-bible-lexicon-pane .lexicon-content font,
+        .strong-bible-lexicon-pane .lexicon-content p,
+        .strong-bible-lexicon-pane .lexicon-content div,
+        .strong-bible-lexicon-pane .lexicon-content span,
+        .strong-bible-lexicon-pane .kwanju-pane-line,
+        .strong-bible-lexicon-pane .kwanju-pane-line *,
+        .strong-bible-lexicon-pane .kwanju-verse-link {
           font-size: ${size}px !important;
         }
       `;
@@ -14460,36 +14470,36 @@ var StrongBibleView = class extends import_obsidian.ItemView {
       return html.replace(/\^/g, " ").replace(/size=["']?\d+["']?/gi, "").replace(/<h[1-6][^>]*>/gi, "<b>").replace(/<\/h[1-6]>/gi, "</b>");
     };
     const korSection = cardEl.createDiv({ cls: "lexicon-section lexicon-kor" });
-    korSection.style.cssText = "border: 1px solid var(--border-color); border-radius: 6px; padding: 10px; background-color: var(--background-secondary); font-size: var(--nav-item-size, 13px);";
-    korSection.createEl("h4", { text: "\uD55C\uAE00\uC6D0\uC5B4\uC0AC\uC804", cls: "lexicon-section-title" }).style.cssText = "margin-top: 0; margin-bottom: 6px; border-bottom: 1px solid var(--border-color); padding-bottom: 4px; color: var(--text-accent); font-size: var(--nav-item-size, 13px); font-weight: bold;";
+    korSection.style.cssText = "border: 1px solid var(--border-color); border-radius: 6px; padding: 10px; background-color: var(--background-secondary); font-size: inherit;";
+    korSection.createEl("h4", { text: "\uD55C\uAE00\uC6D0\uC5B4\uC0AC\uC804", cls: "lexicon-section-title" }).style.cssText = "margin-top: 0; margin-bottom: 6px; border-bottom: 1px solid var(--border-color); padding-bottom: 4px; color: var(--text-accent); font-size: inherit; font-weight: bold;";
     if (korDef) {
       const contentEl = korSection.createDiv({ cls: "lexicon-content" });
       contentEl.innerHTML = cleanLexicon(korDef);
-      contentEl.style.cssText = "font-size: var(--nav-item-size, 13px); line-height: 1.5; color: var(--text-normal);";
+      contentEl.style.cssText = "font-size: inherit; line-height: 1.5; color: var(--text-normal);";
     } else {
-      korSection.createDiv({ text: "\uD55C\uAE00 \uC0AC\uC804 \uC815\uBCF4\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.", cls: "lexicon-empty" }).style.cssText = "color: var(--text-muted); font-style: italic; font-size: var(--nav-item-size, 13px);";
+      korSection.createDiv({ text: "\uD55C\uAE00 \uC0AC\uC804 \uC815\uBCF4\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.", cls: "lexicon-empty" }).style.cssText = "color: var(--text-muted); font-style: italic; font-size: inherit;";
     }
     const engSection = cardEl.createDiv({ cls: "lexicon-section lexicon-eng" });
-    engSection.style.cssText = "border: 1px solid var(--border-color); border-radius: 6px; padding: 10px; background-color: var(--background-secondary); font-size: var(--nav-item-size, 13px);";
-    engSection.createEl("h4", { text: "\uC601\uBB38\uC6D0\uC5B4\uC0AC\uC804", cls: "lexicon-section-title" }).style.cssText = "margin-top: 0; margin-bottom: 6px; border-bottom: 1px solid var(--border-color); padding-bottom: 4px; color: var(--text-muted); font-size: var(--nav-item-size, 13px); font-weight: bold;";
+    engSection.style.cssText = "border: 1px solid var(--border-color); border-radius: 6px; padding: 10px; background-color: var(--background-secondary); font-size: inherit;";
+    engSection.createEl("h4", { text: "\uC601\uBB38\uC6D0\uC5B4\uC0AC\uC804", cls: "lexicon-section-title" }).style.cssText = "margin-top: 0; margin-bottom: 6px; border-bottom: 1px solid var(--border-color); padding-bottom: 4px; color: var(--text-muted); font-size: inherit; font-weight: bold;";
     if (engDef) {
       const contentEl = engSection.createDiv({ cls: "lexicon-content" });
       contentEl.innerHTML = cleanLexicon(engDef);
-      contentEl.style.cssText = "font-size: var(--nav-item-size, 13px); line-height: 1.5; color: var(--text-normal);";
+      contentEl.style.cssText = "font-size: inherit; line-height: 1.5; color: var(--text-normal);";
     } else {
-      engSection.createDiv({ text: "\uC601\uBB38 \uC0AC\uC804 \uC815\uBCF4\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.", cls: "lexicon-empty" }).style.cssText = "color: var(--text-muted); font-style: italic; font-size: var(--nav-item-size, 13px);";
+      engSection.createDiv({ text: "\uC601\uBB38 \uC0AC\uC804 \uC815\uBCF4\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.", cls: "lexicon-empty" }).style.cssText = "color: var(--text-muted); font-style: italic; font-size: inherit;";
     }
   }
   displayKwanjuInBottomPane(refTitle, kwanjuText) {
     this.lexiconContainerEl.empty();
     const cardEl = this.lexiconContainerEl.createDiv({ cls: "strong-lexicon-card" });
-    cardEl.style.cssText = "display: flex; flex-direction: column; gap: 10px; font-size: var(--nav-item-size, 13px);";
+    cardEl.style.cssText = "display: flex; flex-direction: column; gap: 10px; font-size: inherit;";
     const kwanjuSection = cardEl.createDiv({ cls: "lexicon-section lexicon-kwanju" });
-    kwanjuSection.style.cssText = "border: 1px solid var(--border-color); border-radius: 6px; padding: 10px; background-color: var(--background-secondary); font-size: var(--nav-item-size, 13px);";
+    kwanjuSection.style.cssText = "border: 1px solid var(--border-color); border-radius: 6px; padding: 10px; background-color: var(--background-secondary); font-size: inherit;";
     const titleEl = kwanjuSection.createEl("h4", { text: `\u{1F517} [\uAD00\uC8FC] ${refTitle} \uAD00\uB828 \uAD6C\uC808`, cls: "lexicon-section-title" });
-    titleEl.style.cssText = "margin-top: 0; margin-bottom: 8px; border-bottom: 1px solid var(--border-color); padding-bottom: 4px; color: var(--bf-kwanju-title-color, #1e40af); font-size: var(--nav-item-size, 13px); font-weight: bold;";
+    titleEl.style.cssText = "margin-top: 0; margin-bottom: 8px; border-bottom: 1px solid var(--border-color); padding-bottom: 4px; color: var(--bf-kwanju-title-color, #1e40af); font-size: inherit; font-weight: bold;";
     const contentEl = kwanjuSection.createDiv({ cls: "lexicon-content" });
-    contentEl.style.cssText = "line-height: 1.6; color: var(--text-normal); font-size: var(--nav-item-size, 13px);";
+    contentEl.style.cssText = "line-height: 1.6; color: var(--text-normal); font-size: inherit;";
     const parts = kwanjuText.split(/<br\s*\/?>/gi).map((p) => p.trim()).filter(Boolean);
     for (const part of parts) {
       const lineEl = contentEl.createDiv({ cls: "kwanju-pane-line" });
