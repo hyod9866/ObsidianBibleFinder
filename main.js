@@ -13931,8 +13931,24 @@ var StrongBibleView = class extends import_obsidian.ItemView {
     const sFontPlus = strongFontCtrl.createEl("button", { text: "A+", cls: "bible-compare-font-btn" });
 
     const applyStrongFontSize = (size) => {
-      if (this.versesContainerEl) this.versesContainerEl.style.fontSize = `${size}px`;
-      if (this.lexiconContainerEl) this.lexiconContainerEl.style.fontSize = `${size}px`;
+      container.style.setProperty("--bf-strong-font-size", `${size}px`);
+      const applyElSize = (el) => {
+        if (el && el.style && typeof el.style.setProperty === "function") {
+          el.style.setProperty("font-size", `${size}px`, "important");
+        }
+      };
+      applyElSize(this.versesContainerEl);
+      applyElSize(this.lexiconContainerEl);
+      if (this.versesContainerEl && typeof this.versesContainerEl.querySelectorAll === "function") {
+        this.versesContainerEl
+          .querySelectorAll(".strong-verse-line, .strong-verse-kor, .strong-verse-eng, .strong-verse-ref, .strong-code-link")
+          .forEach(applyElSize);
+      }
+      if (this.lexiconContainerEl && typeof this.lexiconContainerEl.querySelectorAll === "function") {
+        this.lexiconContainerEl
+          .querySelectorAll(".strong-lexicon-card, .lexicon-section, .lexicon-section-title, .lexicon-content, .lexicon-content *, .kwanju-pane-line, .kwanju-pane-line *, .kwanju-verse-link, .lexicon-empty")
+          .forEach(applyElSize);
+      }
       let dynStyle = document.getElementById("strong-bible-dynamic-font-style");
       if (!dynStyle) {
         dynStyle = document.createElement("style");
@@ -13940,6 +13956,8 @@ var StrongBibleView = class extends import_obsidian.ItemView {
         document.head.appendChild(dynStyle);
       }
       dynStyle.textContent = `
+        body .workspace-leaf-content[data-type="strong-bible-view"] .strong-bible-verses-pane,
+        body .workspace-leaf-content[data-type="strong-bible-view"] .strong-bible-verses-pane *,
         .strong-bible-verses-pane,
         .strong-bible-verses-pane *,
         .strong-bible-verses-pane .strong-verse-line,
@@ -13948,7 +13966,10 @@ var StrongBibleView = class extends import_obsidian.ItemView {
         .strong-bible-verses-pane .strong-verse-ref,
         .strong-bible-verses-pane .strong-code-link {
           font-size: ${size}px !important;
+          -webkit-text-size-adjust: 100% !important;
         }
+        body .workspace-leaf-content[data-type="strong-bible-view"] .strong-bible-lexicon-pane,
+        body .workspace-leaf-content[data-type="strong-bible-view"] .strong-bible-lexicon-pane *,
         .strong-bible-lexicon-pane,
         .strong-bible-lexicon-pane *,
         .strong-bible-lexicon-pane .lexicon-section,
@@ -13961,11 +13982,14 @@ var StrongBibleView = class extends import_obsidian.ItemView {
         .strong-bible-lexicon-pane .lexicon-content span,
         .strong-bible-lexicon-pane .kwanju-pane-line,
         .strong-bible-lexicon-pane .kwanju-pane-line *,
+        .strong-bible-lexicon-pane .kwanju-pane-line span,
         .strong-bible-lexicon-pane .kwanju-verse-link {
           font-size: ${size}px !important;
+          -webkit-text-size-adjust: 100% !important;
         }
       `;
     };
+    this._applyStrongFontSize = applyStrongFontSize;
     applyStrongFontSize(sCurSize);
 
     const updateStrongFont = async (delta) => {
@@ -14388,6 +14412,9 @@ var StrongBibleView = class extends import_obsidian.ItemView {
         }
       }
     });
+    if (this._applyStrongFontSize) {
+      this._applyStrongFontSize(this.plugin.settings.strongFontSize || 15);
+    }
     setTimeout(() => {
       const targetEl = this.versesContainerEl.querySelector(".target-verse");
       if (targetEl) {
@@ -14489,28 +14516,44 @@ var StrongBibleView = class extends import_obsidian.ItemView {
     } else {
       engSection.createDiv({ text: "\uC601\uBB38 \uC0AC\uC804 \uC815\uBCF4\uB97C \uCC3E\uC744 \uC218 \uC5C6\uC2B5\uB2C8\uB2E4.", cls: "lexicon-empty" }).style.cssText = "color: var(--text-muted); font-style: italic; font-size: inherit;";
     }
+    const curFont = this.plugin.settings.strongFontSize || 15;
+    if (this._applyStrongFontSize) this._applyStrongFontSize(curFont);
   }
   displayKwanjuInBottomPane(refTitle, kwanjuText) {
+    const curFont = this.plugin.settings.strongFontSize || 15;
+    const setInlineFont = (el) => {
+      if (el && el.style && typeof el.style.setProperty === "function") {
+        el.style.setProperty("font-size", `${curFont}px`, "important");
+      }
+    };
     this.lexiconContainerEl.empty();
+    setInlineFont(this.lexiconContainerEl);
     const cardEl = this.lexiconContainerEl.createDiv({ cls: "strong-lexicon-card" });
-    cardEl.style.cssText = "display: flex; flex-direction: column; gap: 10px; font-size: inherit;";
+    cardEl.style.cssText = `display: flex; flex-direction: column; gap: 10px;`;
+    setInlineFont(cardEl);
     const kwanjuSection = cardEl.createDiv({ cls: "lexicon-section lexicon-kwanju" });
-    kwanjuSection.style.cssText = "border: 1px solid var(--border-color); border-radius: 6px; padding: 10px; background-color: var(--background-secondary); font-size: inherit;";
+    kwanjuSection.style.cssText = `border: 1px solid var(--border-color); border-radius: 6px; padding: 10px; background-color: var(--background-secondary);`;
+    setInlineFont(kwanjuSection);
     const titleEl = kwanjuSection.createEl("h4", { text: `\u{1F517} [\uAD00\uC8FC] ${refTitle} \uAD00\uB828 \uAD6C\uC808`, cls: "lexicon-section-title" });
-    titleEl.style.cssText = "margin-top: 0; margin-bottom: 8px; border-bottom: 1px solid var(--border-color); padding-bottom: 4px; color: var(--bf-kwanju-title-color, #1e40af); font-size: inherit; font-weight: bold;";
+    titleEl.style.cssText = `margin-top: 0; margin-bottom: 8px; border-bottom: 1px solid var(--border-color); padding-bottom: 4px; color: var(--bf-kwanju-title-color, #1e40af); font-weight: bold;`;
+    setInlineFont(titleEl);
     const contentEl = kwanjuSection.createDiv({ cls: "lexicon-content" });
-    contentEl.style.cssText = "line-height: 1.6; color: var(--text-normal); font-size: inherit;";
+    contentEl.style.cssText = `line-height: 1.6; color: var(--text-normal);`;
+    setInlineFont(contentEl);
     const parts = kwanjuText.split(/<br\s*\/?>/gi).map((p) => p.trim()).filter(Boolean);
     for (const part of parts) {
       const lineEl = contentEl.createDiv({ cls: "kwanju-pane-line" });
-      lineEl.style.cssText = "margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px dashed var(--border-color);";
+      lineEl.style.cssText = `margin-bottom: 6px; padding-bottom: 4px; border-bottom: 1px dashed var(--border-color);`;
+      setInlineFont(lineEl);
       const refMatch = part.match(/\(([^)]+)\)$/);
       if (refMatch) {
         const refText = refMatch[1];
         const mainPart = part.substring(0, part.lastIndexOf("("));
-        lineEl.createSpan({ text: mainPart });
+        const mainSpan = lineEl.createSpan({ text: mainPart });
+        setInlineFont(mainSpan);
         const linkSpan = lineEl.createSpan({ text: `(${refText})`, cls: "kwanju-verse-link" });
-        linkSpan.style.cssText = "color: var(--bf-strong-ref-color, #58a6ff); font-weight: bold; text-decoration: underline; cursor: pointer; margin-left: 4px;";
+        linkSpan.style.cssText = `color: var(--bf-strong-ref-color, #58a6ff); font-weight: bold; text-decoration: underline; cursor: pointer; margin-left: 4px;`;
+        setInlineFont(linkSpan);
         linkSpan.addEventListener("click", (e) => {
           e.preventDefault();
           this.searchEl.value = refText;
@@ -14520,6 +14563,7 @@ var StrongBibleView = class extends import_obsidian.ItemView {
         lineEl.innerHTML = part;
       }
     }
+    if (this._applyStrongFontSize) this._applyStrongFontSize(curFont);
   }
 };
 var VIEW_TYPE_BIBLE_MAP = "bible-map-view";
