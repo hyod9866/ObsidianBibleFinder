@@ -11644,14 +11644,28 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
     const lastFolder = parts.pop() || "_strong";
     return lastFolder + "_json";
   }
+  async fetchStrongJsonRemote(relPath) {
+    const cleanRel = String(relPath || "").replace(/^\/+/, "");
+    const url = `https://raw.githubusercontent.com/hyod9866/sermon-commentary-data/main/strong_json/${encodeURI(cleanRel).replace(/#/g, "%23")}`;
+    const res = await (0, import_obsidian.requestUrl)({ url, method: "GET" });
+    if (!res || res.status < 200 || res.status >= 300) {
+      throw new Error(`HTTP ${res ? res.status : "ERR"}`);
+    }
+    return typeof res.json === "object" && res.json !== null ? res.json : JSON.parse(res.text);
+  }
   async readSdbBookJson(sdbName, bookNum) {
     const folderName = sdbName.replace(/\.sdb$/i, "");
     const cacheKey = `${folderName}/${bookNum}`;
     if (this.sdbJsonCache[cacheKey])
       return this.sdbJsonCache[cacheKey];
     const jsonPath = `${this.getJsonFolderPath()}/${folderName}/${bookNum}.json`;
-    const content = await this.app.vault.adapter.read(jsonPath);
-    const data = JSON.parse(content);
+    let data = null;
+    try {
+      const content = await this.app.vault.adapter.read(jsonPath);
+      data = JSON.parse(content);
+    } catch (e) {
+      data = await this.fetchStrongJsonRemote(`${folderName}/${bookNum}.json`);
+    }
     this.sdbJsonCache[cacheKey] = data;
     return data;
   }
@@ -11672,10 +11686,14 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
         const jsonPath = `${this.getJsonFolderPath()}/${folderName}/${bucketKey}.json`;
         const content = await this.app.vault.adapter.read(jsonPath);
         bucketData = JSON.parse(content);
-        this.dctJsonCache[cacheKey] = bucketData;
       } catch (e) {
-        return null;
+        try {
+          bucketData = await this.fetchStrongJsonRemote(`${folderName}/${bucketKey}.json`);
+        } catch (e2) {
+          return null;
+        }
       }
+      if (bucketData) this.dctJsonCache[cacheKey] = bucketData;
     }
     return (bucketData == null ? void 0 : bucketData[scode]) || null;
   }
@@ -11684,9 +11702,18 @@ var BethlehemBiblePlugin = class extends import_obsidian.Plugin {
     const result = {};
     if (this.isOnMobile()) {
       try {
-        const jsonPath = `${this.getJsonFolderPath()}/\uC131\uACBD\uAD00\uC8FC/${bookNum}.json`;
-        const content = await this.app.vault.adapter.read(jsonPath);
-        const data = JSON.parse(content);
+        if (!this.kwanjuJsonCache) this.kwanjuJsonCache = {};
+        let data = this.kwanjuJsonCache[bookNum];
+        if (!data) {
+          const jsonPath = `${this.getJsonFolderPath()}/\uC131\uACBD\uAD00\uC8FC/${bookNum}.json`;
+          try {
+            const content = await this.app.vault.adapter.read(jsonPath);
+            data = JSON.parse(content);
+          } catch (e) {
+            data = await this.fetchStrongJsonRemote(`\uC131\uACBD\uAD00\uC8FC/${bookNum}.json`);
+          }
+          if (data) this.kwanjuJsonCache[bookNum] = data;
+        }
         const chapterData = (data == null ? void 0 : data[String(chapter)]) || {};
         for (const [v, btext] of Object.entries(chapterData)) {
           result[parseInt(v)] = btext;
@@ -14317,11 +14344,11 @@ var StrongBibleView = class extends import_obsidian.ItemView {
       if (this.versesContainerEl.contains(loadingEl)) {
         this.versesContainerEl.empty();
         this.versesContainerEl.createDiv({
-          text: "\u26A0\uFE0F \uC6D0\uC5B4 \uC131\uACBD \uB370\uC774\uD130\uB97C \uBD88\uB7EC\uC624\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.\n_strong_json \uD3F4\uB354\uAC00 \uB3D9\uAE30\uD654\uB418\uC5C8\uB294\uC9C0 \uD655\uC778\uD574 \uC8FC\uC138\uC694.",
+          text: "\u26A0\uFE0F \uC6D0\uC5B4 \uC131\uACBD \uB370\uC774\uD130\uB97C \uBD88\uB7EC\uC624\uC9C0 \uBABB\uD588\uC2B5\uB2C8\uB2E4.\n_strong_json \uD3F4\uB354 \uB610\uB294 \uC778\uD130\uB137(GitHub) \uC5F0\uACB0\uC744 \uD655\uC778\uD574 \uC8FC\uC138\uC694.",
           cls: "error-text"
         });
       }
-    }, 3e3);
+    }, 12e3);
     const mode = this.displayModeSelectEl.value;
     const winFolder = this.plugin.settings.bethlehemWinFolder;
     const runQuery = async (sdbName, dctName, isEnglish) => {
